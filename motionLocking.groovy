@@ -1,3 +1,5 @@
+/* Version 1.2 */
+
 definition(
     name: "Motion Locking",
     namespace: "BD",
@@ -25,9 +27,11 @@ def mainPage() {
             if (bMotion) input "bMinutes", "number", title: "Wait this number of minutes", submitOnChange: true, description: "Enter number of minutes"
             input "bContact", "capability.contactSensor", title: "Use these contact sensors", submitOnChange: true, required: false, multiple: false
 		} 
-		section("Audio Messages") {	
-		    input "speakDev", "capability.speechSynthesis", title: "Select TTS Device", submitOnChange:true, required: false
+        	section("Audio Messages") {	
+		    input "speakDev", "capability.speechSynthesis", title: "Select TTS Device", submitOnChange:true, required: false, multiple: true
+            input "introS", "bool", title: "Intro Sound", width: 6    
 		}
+        
         section() {
         input "modesY", "mode", title: "Only when mode is", multiple: true, submitOnChange: true
         input "logging", "bool", title: "Enable logging", width: 6
@@ -62,7 +66,7 @@ def initialize() {
 //*********************//
 
 def fCancel(evt) {
-    if (logging) log.debug "received front door ${evt.value} event"  
+    if (logging) log.debug "received front door ${evt.value} event"     
     if (state.fSchedule == true){
         if (logging) log.info "unscheduling front door timers"
         state.fSchedule = false
@@ -73,15 +77,11 @@ def fCancel(evt) {
 
 def fHandler(evt) {
     def cMode = location.currentMode
-//    def message = ''
-//    if (logging) log.debug "location mode is $cMode"
     if (getModeOk()==true) {  
         if (logging) log.debug "received ${evt.value} motion event at the front door"
         if(evt.value == "inactive"){
            if(fLock.currentLock.contains("unlocked")) {
                if (logging) log.info "setting timer to lock the front door in $fMinutes minutes"
-               //message = "setting timer to lock the front door in $fMinutes minutes"
-               //speakAction(message)
                state.fSchedule = true
                runIn(fMinutes * 60, fLocking)
            }
@@ -100,12 +100,9 @@ def fHandler(evt) {
 }
     
 def fLocking() {
-//   def message = '' 
    if(fLock.currentLock.contains("unlocked")){
         if(fContact.currentContact.contains("open")){
             if (logging) log.warn "Front Door conctact is open, checking again in one minute"
-            //message = "I cannot lock the door because the ${fContact.getDisplayName()} is open, checking again in one minute"
-            //speakAction(message)
             runIn(1 * 60, secondTry)
         }
        else {
@@ -119,7 +116,6 @@ def fLocking() {
 }
     
 def secondTry() {
-//  def message = ''
     if (fLock.currentLock.contains("unlocked")) {
        if (fContact.currentContact.contains("closed")){
            if (logging) log.info "locking the door after second try"
@@ -127,9 +123,7 @@ def secondTry() {
            fLock.lock()
        }
        else {
-            if (logging) log.warn "Front door is still open, checking again in one minute"
-            //message = "${fContact.getDisplayName()} is still open, checking again in one minute"
-            //speakAction(message)
+            if (logging) log.warn "Front door conctact is still open checking again in one minute"
             runIn(1 * 60, thirdTry)    
         }
     }
@@ -139,9 +133,8 @@ def secondTry() {
 def thirdTry() {
     if(fLock.currentLock.contains("unlocked")){
         log.error "locking the front door after third try, please check your contact sensor"
-        def message = ''
-        message = "Heads up, ${fContact.getDisplayName()} is still open, locking the ${fLock.getDisplayName()}, but you may want to check the sensor to make sure it works properly"
-        speakAction(message)
+        def message = "Heads up, locking the front door while the door appears to be open" 
+        if (speakDev) playMessage(message)
         state.fSchedule = false
         fLock.lock()
     }
@@ -152,7 +145,7 @@ def thirdTry() {
 //*********************//
 
 def bCancel(evt) {
-    if (logging) log.debug "received back door ${evt.value} event"  
+    if (logging) log.debug "received back door ${evt.value} event"
     if (state.bSchedule == true){
         if (logging) log.info "unscheduling back door timers"
         state.bSchedule = false
@@ -163,12 +156,12 @@ def bCancel(evt) {
 
 def bHandler(evt) {
     def cMode = location.currentMode
-//    if (logging) log.debug "location mode is $cMode"
     if (getModeOk()==true) {  
         if (logging) log.debug "received ${evt.value} motion event at the back door"
         if(evt.value == "inactive"){
            if(bLock.currentLock.contains("unlocked")) {
                if (logging) log.info "setting timer to lock the back door in $bMinutes minutes"
+               state.bSchedule = true
                runIn(bMinutes * 60, bLocking)
            }
            else if (logging) log.info "not taking action because the back door lock is ${bLock.currentLock}"
@@ -219,10 +212,9 @@ def secondTryB() {
 def thirdTryB() {
     if(bLock.currentLock.contains("unlocked")){
         log.error "locking the back door after third try, please check your contact sensor"
-        def message = ''
-        message = "Heads up, ${bContact.getDisplayName()} is still open, locking the ${bLock.getDisplayName()}, but you may want to check the sensor to make sure it works properly"
-        speakAction(message)
+        def message = "Heads up, locking the back door while the door appears to be open" 
         state.bSchedule = false
+        if (speakDev) playMessage(message)
         bLock.lock()
     }
 }
@@ -232,9 +224,9 @@ private getModeOk() {
 //	log.trace "modeYOk = $result"
 	return result
 }
-
-def speakAction(message) {
-    log.debug "Speaking: '$message'"
-			speakDev.speak(message)
-
+def playMessage(message) {
+        def track = "http://soundbible.com/mp3/Electronic_Chime-KevanGC-495939803.mp3"
+        if (logging) log.debug "Sending message to selected speakers"
+		if (introS) speakDev.each { it.playTrack(track) }
+		speakDev.each { it.speak(message) }
 }
