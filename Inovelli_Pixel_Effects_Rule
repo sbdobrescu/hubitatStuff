@@ -1,3 +1,7 @@
+/*
+8/9/2021 - initial commit
+*/
+
 definition(
     name: "Inovelli Pixel Effects Rule",
     namespace: "BD",
@@ -14,69 +18,81 @@ preferences {
 
 def mainPage() {
 	dynamicPage(name: "mainPage", title: " ", install: true, uninstall: true) {
-		section {
+		section ("Light Effects Settings") {
 			input "appName", "text", title: "Name this Pixel Effects Rule", submitOnChange: true
 			    if(appName) app.updateLabel("$appName")
 			input "dGroup", "capability.colorControl", title: "Select LZW45 Light Strip(s)", submitOnChange: true, required: true, multiple: true
-            if (dGroup) {
-                input "lightEffect", "enum", title: "Select Pixel Effect", options: [
-        1:"Static",
-        2:"Blink",
-        3:"Breath",
-        4:"Color Wipe",
-        5:"Color Wipe Reverse Inverse",
-        6:"Color Wipe Random",
-        7:"Random Color",
-        8:"Single Dynamic",
-        9:"Multi Dynamic",
-        10:"Rainbow",
-        11:"Rainbow Cycle",
-        12:"Scan",
-        13:"Dual Scan",
-        14:"Fade",
-        15:"Running Lights",
-        16:"Twinkle",
-        17:"Twinkle Random",
-        18:"Twinkle Fade",
-        19:"Twinkle Fade Random",
-        20:"Sparkle",
-        21:"Flash Sparkle",
-        22:"Hyper Sparkle",
-        23:"Strobe",
-        24:"Blink Rainbow",
-        25:"Chase White",
-        26:"Chase Color",
-        27:"Chase Random",
-        28:"Chase Rainbow",
-        29:"Chase Flash",
-        30:"Chase Flash Random",
-        31:"Chase Rainbow White",
-        32:"Chase Blackout",
-        33:"Chase Blackout Rainbow",
-        34:"Color Sweep Random",
-        35:"Running Color",
-        36:"Running Red Blue",
-        37:"Running Random",
-        38:"Larson Scanner",
-        39:"Comet",
-        40:"Fireworks",
-        41:"Fireworks Random",
-        42:"Merry Christmas",
-        43:"Circus Combustus",
-        44:"Halloween",
-        45:"Rainbow Aurora",
-        46:"Aurora"
-        ],submitOnChange: true, required: true, multiple: false
+            if (dGroup) {         
+            input "lightEffect", "enum", title: "Select Pixel Effect", options: [
+                1:"Static",
+                2:"Blink",
+                3:"Breath",
+                4:"Color Wipe",
+                5:"Color Wipe Reverse Inverse",
+                6:"Color Wipe Random",
+                7:"Random Color",
+                8:"Single Dynamic",
+                9:"Multi Dynamic",
+                10:"Rainbow",
+                11:"Rainbow Cycle",
+                12:"Scan",
+                13:"Dual Scan",
+                14:"Fade",
+                15:"Running Lights",
+                16:"Twinkle",
+                17:"Twinkle Random",
+                18:"Twinkle Fade",
+                19:"Twinkle Fade Random",
+                20:"Sparkle",
+                21:"Flash Sparkle",
+                22:"Hyper Sparkle",
+                23:"Strobe",
+                24:"Blink Rainbow",
+                25:"Chase White",
+                26:"Chase Color",
+                27:"Chase Random",
+                28:"Chase Rainbow",
+                29:"Chase Flash",
+                30:"Chase Flash Random",
+                31:"Chase Rainbow White",
+                32:"Chase Blackout",
+                33:"Chase Blackout Rainbow",
+                34:"Color Sweep Random",
+                35:"Running Color",
+                36:"Running Red Blue",
+                37:"Running Random",
+                38:"Larson Scanner",
+                39:"Comet",
+                40:"Fireworks",
+                41:"Fireworks Random",
+                42:"Merry Christmas",
+                43:"Circus Combustus",
+                44:"Halloween",
+                45:"Rainbow Aurora",
+                46:"Aurora",
+                47:"Fireplace"],submitOnChange: true, required: true, multiple: false
+        input "effectColor", "enum", title: "Change Color", required: false, multiple: false, submitOnChange: true, width: 6,
+		        options: ["Soft White", "White", "Daylight", "Warm White", "Red", "Green", "Blue", "Yellow", "Orange", "Purple", "Pink", "Random color"]                 
         input "level", "number", title: "Pixel Effect Level", submitOnChange: true, required: true
+        input "turnOff", "bool", title: "Turn off instead of stopping the effect?", width: 6
         }
-            input "dDriver", "capability.switch", title: "Select the virtual switch that triggers this Pixel Effect rule", submitOnChange: true, required: true, multiple: false
-		    input "logging", "bool", title: "Enable logging", width: 6
+    }    
+    section ("Light Effects Triggers") {    
+       input "dDriver", "capability.switch", title: "Select the virtual switch that triggers this Pixel Effect rule", submitOnChange: true, required: false, multiple: true
+       input "buttonDev", "capability.pushableButton", title: "Select Button Device(s)", required: false, submitOnChange: true, multiple: true
+            if (buttonDev) input "butNo", "number", title: "> Button number?", required: false, submitOnChange: true
+            if (butNo) {
+                input "butType", "enum", title: "> Button Type?", required: false, submitOnChange: true,
+					options: ["pushed", "held"]
+            }
+       input "logging", "bool", title: "Enable logging", width: 6
         }
-	}
+    }
 }
 
 def installed() {
 	initialize()
+    state.isRunning = false
 }
 
 def updated() {
@@ -86,20 +102,142 @@ def updated() {
 
 def initialize() {
     log.debug "initializing"
-    subscribe(dDriver,"switch",handler)    
+    if (dDriver) subscribe(dDriver,"switch",handler)
+    if (buttonDev) subscribe(buttonDev, "${butType}.${butNo}", btnActions)
+}
+
+def btnActions(evt) {
+    if (logging) log.warn "Received button event"
+    if (logging) log.trace "checking to see if the rule is already running"
+    if (state.isRunning == true) {
+        if (logging) log.trace "rule is already running"
+        if (turnOff) {
+            if (logging) log.info "rule was running, turning off from button event"
+                dGroup.off()
+        }
+        else {
+            if (logging) log.info "stopping light effect from button event"
+                state.isRunning = false
+            if (pE <= 46){
+                dGroup.pixelEffectStop()
+            }
+            else dGroup.customEffectStop()
+        }
+    }
+    else {
+        if (logging) log.trace "rule is not running"
+        def pE = settings["lightEffect"].toInteger()
+        if (logging) log.info "starting light effect from button event"
+        state.isRunning = true
+        if (pE <= 46){
+            dGroup.pixelEffectStart(pE, level)
+        }
+        else customEffect(pE)
+    }     
 }
 
 def handler(evt) {
-    //log.info "event received $evt" 
     if (evt.value == "on") {
-        if (logging) log.info "starting light effect"
         def pE = settings["lightEffect"].toInteger()
-        dGroup.pixelEffectStart(pE, level)
+        if (logging) log.info "starting light effect"
+        state.isRunning = true
+        if (effectColor) {
+            if (logging) log.trace "checking color"
+            doColor()
+        }
+        if (pE <= 46){
+            if (logging) log.info "starting pixel effect"    
+            dGroup.pixelEffectStart(pE, level)
+        }
+        else {
+            if (logging) log.info "starting custom effect" 
+            customEffect(pE)
+        }
     }
     //off event received
     else {
-        if (logging) log.info "stopping light effect"
-         dGroup.pixelEffectStop()
-        
+        if (logging) log.warn "off event received"
+        state.isRunning = false
+        if (turnOff) {
+            if (logging) log.info "rule was running, turning off from off event"
+                dGroup.off()
         }
+        else {
+            if (logging) log.info "stopping light effect from off event"
+                state.isRunning = false
+            if (pE <= 46){
+                dGroup.pixelEffectStop()
+            }
+            else dGroup.customEffectStop()
+        }
+    }
+}
+
+def customEffect(effect) {
+    if (logging) log.info "starting custom effect"
+    state.isRunning = true
+	switch(effect) {
+		case "47": 
+			dGroup.each { it.customEffectStart("2700066,6500884,3933441,255") }
+			break;
+		case "48":
+			break;
+		case "49": 
+			break;
+		case "50": 
+			break;
+    }    
+}
+
+void doColor() {
+    def color = settings.effectColor
+    def level = settings.level
+    if (logging) log.info "setting color"
+	switch(color) {
+		case "White":
+			hueColor = 11    //52
+			saturation = 0    //19
+			break
+		case "Daylight":
+			hueColor = 11    //53
+			saturation = 10    //91
+			break
+		case "Soft White":
+			hueColor = 11    //23
+			saturation = 30    //56
+			break
+		case "Warm White":
+			hueColor = 11    //20
+			saturation = 20    //80
+			break
+		case "Blue":
+			hueColor = 66    //70
+			break
+		case "Green":
+			hueColor = 33    //35
+			break
+		case "Yellow":
+			hueColor = 16    //25
+			break
+		case "Orange":
+			hueColor = 11    //10
+			break
+		case "Purple":
+			hueColor = 83    //75
+			break
+		case "Pink":
+			hueColor = 97    //83
+			saturation = 25
+			break
+		case "Red":
+			hueColor = 100
+			break
+		case "Random color":
+			hueColor = Math.random()*100 as Integer
+			break
+	}
+	    if(saturation == null) saturation = 100
+	    Map newValue = [hue: hueColor, saturation: saturation, level: level]
+	    dGroup.setColor(newValue)
+	    if(lightLevel == 0) dGroup.off()  
 }
