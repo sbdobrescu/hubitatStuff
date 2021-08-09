@@ -1,12 +1,13 @@
 /*
 8/9/2021 - initial commit
+8/9/2021 - bug fixes cont'd 
 */
 
 definition(
     name: "Inovelli Pixel Effects Rule",
     namespace: "BD",
     author: "Bobby Dobrescu",
-    description: "Set Pixel Effects to one or more LZW45 Light Strips using a virtual switch",
+    description: "Set Pixel Effects to one or more LZW45 Light Strips",
     parent: "BD:Inovelli Pixel Effects Control",
     category: "Convenience",
     iconUrl: "",
@@ -108,12 +109,12 @@ def initialize() {
     if (buttonDev) subscribe(buttonDev, "${butType}.${butNo}", btnActions)
     if (enableSwitch) {
 		def enableSwitchDev = getChildDevice("effectControl_${app.id}")
-		if (!enableSwitchDev) { enableSwitchDev = addChildDevice("hubitat", "Virtual Switch", "effectControl_${app.id}", null, [label: "effectControl_${app.appName}", name: "effectControl_${app.appName}"]) }
+		if (!enableSwitchDev) { enableSwitchDev = addChildDevice("hubitat", "Virtual Switch", "effectControl_${app.id}", null, [label: "${app.appName} Switch", name: "Inovelli Pixel Effects Control Switch"]) }
 		subscribe(enableSwitchDev, "switch",  handler)
 	} else {
 		def enableSwitchDev = getChildDevice("effectControl_${app.id}")
+        log.debug "deleting virtual device $enableSwitchDev"
 		if (enableSwitchDev) { deleteChildDevice(enableSwitchDev.getDeviceNetworkId()) }
-		subscribe(enableSwitchDev, "switch",  handler)
 	}
 }
 
