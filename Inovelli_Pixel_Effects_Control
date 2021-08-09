@@ -1,0 +1,50 @@
+definition(
+	name: "Inovelli Pixel Effects Control",
+	singleInstance: true,
+	namespace: "BD",
+	author: "Bobby Dobrescu",
+	description: "Create New Pixel Effects for LZW45 Light Strips ",
+	category: "Convenience",
+	iconUrl: "",
+	iconX2Url: "",
+	installOnOpen: true
+)
+
+preferences {
+	page(name: "mainPage")
+  	page(name: "removePage")
+}
+
+def mainPage() {
+	dynamicPage(name: "mainPage", title: " ", install: true, uninstall: false) {
+		section {
+			app(name: "childButtons", appName: "Inovelli Pixel Effects Rule", namespace: "BD", title: "Create a Pixel Effects Rule", multiple: true, displayChildApps: false)
+			paragraph("  ")
+			href "removePage", title: "Remove Group Control", description: ""
+		}
+	}
+}
+
+def removePage() {
+	dynamicPage(name: "removePage", title: "Remove all Groups", install: false, uninstall: true) {
+		section ("WARNING!\n\nRemoving this app will remove all Groups\n") {
+		}
+	}
+}
+
+
+def installed() {
+	initialize()
+}
+
+def updated() {
+	unsubscribe()
+	initialize()
+}
+
+def initialize() {
+}
+
+
+def removeChild(ch) {
+}
