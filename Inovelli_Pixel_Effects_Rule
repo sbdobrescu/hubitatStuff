@@ -1,0 +1,105 @@
+definition(
+    name: "Inovelli Pixel Effects Rule",
+    namespace: "BD",
+    author: "Bobby Dobrescu",
+    description: "Set Pixel Effects to one or more LZW45 Light Strips using a virtual switch",
+    parent: "BD:Inovelli Pixel Effects Control",
+    category: "Convenience",
+    iconUrl: "",
+    iconX2Url: "")
+
+preferences {
+	page(name: "mainPage")
+}
+
+def mainPage() {
+	dynamicPage(name: "mainPage", title: " ", install: true, uninstall: true) {
+		section {
+			input "appName", "text", title: "Name this Pixel Effects Rule", submitOnChange: true
+			    if(appName) app.updateLabel("$appName")
+			input "dGroup", "capability.colorControl", title: "Select LZW45 Light Strip(s)", submitOnChange: true, required: true, multiple: true
+            if (dGroup) {
+                input "lightEffect", "enum", title: "Select Pixel Effect", options: [
+        1:"Static",
+        2:"Blink",
+        3:"Breath",
+        4:"Color Wipe",
+        5:"Color Wipe Reverse Inverse",
+        6:"Color Wipe Random",
+        7:"Random Color",
+        8:"Single Dynamic",
+        9:"Multi Dynamic",
+        10:"Rainbow",
+        11:"Rainbow Cycle",
+        12:"Scan",
+        13:"Dual Scan",
+        14:"Fade",
+        15:"Running Lights",
+        16:"Twinkle",
+        17:"Twinkle Random",
+        18:"Twinkle Fade",
+        19:"Twinkle Fade Random",
+        20:"Sparkle",
+        21:"Flash Sparkle",
+        22:"Hyper Sparkle",
+        23:"Strobe",
+        24:"Blink Rainbow",
+        25:"Chase White",
+        26:"Chase Color",
+        27:"Chase Random",
+        28:"Chase Rainbow",
+        29:"Chase Flash",
+        30:"Chase Flash Random",
+        31:"Chase Rainbow White",
+        32:"Chase Blackout",
+        33:"Chase Blackout Rainbow",
+        34:"Color Sweep Random",
+        35:"Running Color",
+        36:"Running Red Blue",
+        37:"Running Random",
+        38:"Larson Scanner",
+        39:"Comet",
+        40:"Fireworks",
+        41:"Fireworks Random",
+        42:"Merry Christmas",
+        43:"Circus Combustus",
+        44:"Halloween",
+        45:"Rainbow Aurora",
+        46:"Aurora"
+        ],submitOnChange: true, required: true, multiple: false
+        input "level", "number", title: "Pixel Effect Level", submitOnChange: true, required: true
+        }
+            input "dDriver", "capability.switch", title: "Select the virtual switch that triggers this Pixel Effect rule", submitOnChange: true, required: true, multiple: false
+		    input "logging", "bool", title: "Enable logging", width: 6
+        }
+	}
+}
+
+def installed() {
+	initialize()
+}
+
+def updated() {
+	unsubscribe()
+	initialize()
+}
+
+def initialize() {
+    log.debug "initializing"
+    subscribe(dDriver,"switch",handler)    
+}
+
+def handler(evt) {
+    //log.info "event received $evt" 
+    if (evt.value == "on") {
+        if (logging) log.info "starting light effect"
+        def pE = settings["lightEffect"].toInteger()
+        dGroup.pixelEffectStart(pE, level)
+    }
+    //off event received
+    else {
+        if (logging) log.info "stopping light effect"
+         dGroup.pixelEffectStop()
+        
+        }
+}
