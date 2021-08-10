@@ -1,6 +1,7 @@
 /*
 8/9/2021 - initial commit
 8/9/2021 - bug fixes cont'd 
+8/10/2021 - minor fixes
 */
 
 definition(
@@ -72,22 +73,21 @@ def mainPage() {
                 45:"Rainbow Aurora",
                 46:"Aurora",
                 47:"Fireplace"],submitOnChange: true, required: true, multiple: false
-        input "effectColor", "enum", title: "Change Color", required: false, multiple: false, submitOnChange: true, width: 6,
+        input "effectColor", "enum", title: "Set Color (optional)", required: false, multiple: false, submitOnChange: true, width: 6,
 		        options: ["Soft White", "White", "Daylight", "Warm White", "Red", "Green", "Blue", "Yellow", "Orange", "Purple", "Pink", "Random color"]                 
-        input "level", "number", title: "Pixel Effect Level", submitOnChange: true, required: true
-        input "turnOff", "bool", title: "Turn off instead of stopping the effect?", width: 6
+        input "level", "number", title: "Pixel Effect Level", submitOnChange: true, required: true, width: 4
+        input "turnOff", "bool", title: "Turn off light strips instead of stopping the effect?", width: 6
         }
     }    
     section ("Light Effects Triggers") {    
-       input "dDriver", "capability.switch", title: "Select one or more switches to triggers this Pixel Effect rule", submitOnChange: true, required: false, multiple: true
-       input "buttonDev", "capability.pushableButton", title: "Select Button Device(s)", required: false, submitOnChange: true, multiple: true
+       input "dDriver", "capability.switch", title: "Use one or more switches to trigger this Pixel Effect rule", submitOnChange: true, required: false, multiple: true
+       input "buttonDev", "capability.pushableButton", title: "Use button device(s)", required: false, submitOnChange: true, multiple: true
             if (buttonDev) input "butNo", "number", title: "> Button number?", required: false, submitOnChange: true
             if (butNo) {
                 input "butType", "enum", title: "> Button Type?", required: false, submitOnChange: true,
 					options: ["pushed", "held"]
             }
-       
-        input "enableSwitch", "bool", title: "Create Virtual Switch", submitOnChange: true
+        input "enableSwitch", "bool", title: "Create Virtual Switch to trigger this Pixel Effect rule ", submitOnChange: true
         input "logging", "bool", title: "Enable logging", width: 6
         }
     }
