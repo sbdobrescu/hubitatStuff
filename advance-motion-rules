@@ -1,0 +1,736 @@
+definition(
+    name: "AML: Advanced Motion Lighting Rule",
+    namespace: "BD",
+    author: "Bobby Dobrescu",
+    description: "Dim a light before it turns off",
+    parent: "BD:Advanced Motion Lighting",
+    category: "Convenience",
+    iconUrl: "",
+    iconX2Url: "")
+
+preferences {
+	page(name: "mainPage")
+}
+
+def mainPage() {
+	dynamicPage(name: "mainPage", title: " ", install: true, uninstall: true) {
+    state.actsTrue = ""
+    state.actsLevTrue = ""		
+		section ("Settings"){
+			input "appName", "text", title: "Name this rule", submitOnChange: true
+                if(appName) {
+                    def newName = "AML: $appName"
+                    app.updateLabel("AML: $appName")
+                    state.appName = newName //appName
+                }
+            input "logging", "bool", title: "Enable logging"
+        }
+		section ("Lights"){
+            def myModes = []
+			location.modes.each {myModes << "$it"}
+			input "dDimmer", "capability.switchLevel", title: "Select Dimmers", submitOnChange: true, required: false, multiple: true
+                if(dDimmer) {
+                    //state.prevLevel["$it.id"] = currLevel
+				    input "dimmerModes", "enum", title: "> Select level by mode", required: true, options: myModes.sort(), multiple: true, submitOnChange: true
+                    if(dimmerModes) {
+                        def sortModes = dimmerModes.sort()
+                        sortModes.each {getModeLevel(it, "level" + "$it")}
+				}
+			}
+            //input "dColor", "capability.colorTemperature", title: "Select Color Temperature devices", submitOnChange: true, required: false, multiple: true    
+            input "dSwitch", "capability.switch", title: "Select Switches", submitOnChange: true, required: false, multiple: true            
+        }   
+		section ("Sensors"){
+            def myModes = []
+			location.modes.each {myModes << "$it"}            
+            input "dContact", "capability.contactSensor", title: "Select Contact Sensor", submitOnChange: true, required: false, multiple: true            
+            input "dMotion", "capability.motionSensor", title: "Select Motion Sensor", submitOnChange: true, required: false, multiple: true
+            if (dMotion) input "dMotionKeepOn", "capability.motionSensor", title: "Select additional motion sensor to keep light(s) on", submitOnChange: true, required: false, multiple: true
+            
+             if (dMotion) {
+                input "allModes", "bool", title: "Use same delay for all modes?", required: false, defaultValue: false, submitOnChange: true, width: 4 
+                 if (!allModes) {
+                     input "minDelayModes", "enum", title: "> Delay before turning off by mode", required: false, options: myModes.sort(), multiple: true, submitOnChange: true
+                     if(minDelayModes) {
+                        def sortModes = minDelayModes.sort()
+                        sortModes.each {getModeDelay(it, "min" + "$it")}
+				    }
+                 }
+                if (allModes) input "minDelay", "number", title: "Delay before turning off", submitOnChange: true, required: true 
+             }
+        }
+		section ("Restrictions"){            
+            if(dContact) input "contactFirst", "bool", title: "Contact must trigger first?", required: false, defaultValue: false, submitOnChange: true, width: 4          
+            if (dMotion) input "enableOn", "bool", title: "Enable turning the light on?", required: false, defaultValue: false, submitOnChange: true, width: 4       
+            if (dMotion) input "enableOff", "bool", title: "Enable turning the light off?", required: false, defaultValue: false, submitOnChange: true, width: 4            
+            if (enableOn) input "modesY", "mode", title: "Only turn on when mode is in this list (default turn on any mode)", multiple: true, submitOnChange: true 
+            input "disabled", "capability.switch", title: "Switch to disable rule", required: false, multiple: false, submitOnChange: true, description: "Select switch"
+            input "disabledOn", "capability.switch", title: "Switch to only prevent lights to turn on", required: false, multiple: false, submitOnChange: true, description: "Select switch"
+            input "disabledOff", "capability.switch", title: "Switch to only prevent lights to turn off", required: false, multiple: false, submitOnChange: true, description: "Select switch"
+            input "luxDev", "capability.illuminanceMeasurement", title: "Only turn on if lux is less than", submitOnChange: true, required: false, multiple: false
+                if (luxDev) { 
+				    input "luxLevel", "number", title: "Lux", submitOnChange: true, required: true
+			    }
+        }            
+        section() {
+			input "startingX", "enum", title: "Starting at", options: ["A specific time", "Sunrise", "Sunset"], defaultValue: "A specific time", submitOnChange: true, required: false
+			if(startingX in [null, "A specific time"]) input "starting", "time", title: "Start time", required: false
+			else {
+				if(startingX == "Sunrise") input "startSunriseOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
+				else if(startingX == "Sunset") input "startSunsetOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
+			}
+		}
+		section() {
+			input "endingX", "enum", title: "Ending at", options: ["A specific time", "Sunrise", "Sunset"], defaultValue: "A specific time", submitOnChange: true, required: false
+			if(endingX in [null, "A specific time"]) input "ending", "time", title: "End time", required: false
+			else {
+				if(endingX == "Sunrise") input "endSunriseOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
+				else if(endingX == "Sunset") input "endSunsetOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
+		    } 
+        }
+	}
+}
+
+def installed() {
+    state.prevLevel = [:] 
+	initialize()
+}
+
+def updated() {
+	unsubscribe()
+	initialize()
+}
+
+def initialize() {
+    state.prevLevel = [:]    
+    state.stepDown = false
+    state.disabledLux = false
+    state.disabledOff = false
+    state.disabledOn = false
+    state.disabled = false
+    
+    log.debug "initializing"
+    if (dContact) {
+        subscribe(dContact, "contact.open", handler)
+        subscribe(dContact, "contact.closed", offContactHandler)
+    }
+    if (dMotion) {
+        subscribe(dMotion, "motion.active", handler)
+        subscribe(dMotion, "motion.inactive", offHandler)
+    }
+    if (dMotionKeepOn) {
+        subscribe(dMotionKeepOn, "motion.active", handlerKeepOn)
+        subscribe(dMotionKeepOn, "motion.inactive", offHandler)
+    }    
+    
+    if (dDimmer) {
+        subscribe(dDimmer, "level", levelHandler)
+        subscribe (dDimmer, "switch", dDimState)
+    }
+    if (dSwitch) {subscribe (dSwitch, "switch", dSwitchState)}
+    if (disabled) {
+        subscribe (disabled, "switch", disableH)
+        state.disabled = getDisabledOk()
+    }
+    if (disabledOn) {
+        subscribe (disabledOn, "switch", disableOn)
+        state.disabledOn = getDisabledOnOk()
+    }
+    if (disabledOff) {
+        subscribe (disabledOff, "switch", disableOff)
+        state.disabledOff = getDisabledOffOk()
+    }    
+    if (luxDev) {
+        subscribe (luxDev, "illuminance", disableLux)
+        state.disabledLux = getLuxOk()
+    }
+}
+def handler(evt) {
+    if (logging) log.debug "executing handler() - $evt.displayName was ${evt.value}" 
+    unschedule() //added 2/17/2022
+     
+    //if (logging) log.warn "timeOk is $timeOk"
+    def disable = state.disabled
+    def disableOn = state.disabledOn
+    def disableLux = state.disabledLux 
+    def timeOk = getTimeOk()
+    def motionOk = getMotionOk(evt.value)
+    def getModeOk = getModeOk()
+    Integer lev = getDefaultLevel()
+    Integer color = getModeColor()
+
+    if (dDimmer){
+        if (dDimmer.currentSwitch.contains("on")) {
+            settings.dDimmer.each {
+                if (it.currentSwitch.contains("on")) {
+                    Integer currLevel = it.currentLevel
+                    Integer stepDownLevel = lev/4
+                    if (state.prevLevel["$it.id"] == null) {
+                        if (logging) log.warn "saving current level ($currLevel) as previous level was null for $it.displayName" 
+                        state.prevLevel["$it.id"] = currLevel
+                    }
+                    else {
+                        Integer prevLevel = state.prevLevel["$it.id"].toInteger()
+                         if(state.stepDown == false){                            
+                            if(prevLevel != currLevel && currLevel != lev && stepDownLevel != currLevel) {
+                                if (logging) log.warn "saving current level ($currLevel) as previous level was ($prevLevel) for $it.displayName" 
+                                state.prevLevel["$it.id"] = currLevel
+                            }
+                         }
+                    }
+                }
+            }
+        }
+    }    
+    if (getModeOk==true && disable == false && timeOk==true) {
+        if (dDimmer) {
+            unschedule() 
+            settings.dDimmer.each {
+                if (it.currentSwitch.contains("on")) {
+                    Integer prevLevel = state.prevLevel["$it.id"].toInteger()
+                    Integer currLevel = it.currentLevel
+                    Integer stepDownLevel = lev/4
+                    if (stepDownLevel < 1) stepDownLevel = 1
+                    if (stepDownLevel == currLevel && state.stepDown == true) {
+                        if (prevLevel > 0) {
+                            it.setLevel(prevLevel)
+                        }
+                        else it.setLevel(lev)
+                    }
+                    else {
+                        if (stepDownLevel == currLevel && state.stepDown == false) {
+                            if (it.hasCapability("Color Temperature")) {
+                                //Integer color = getModeColor()
+                                if (logging) log.info "Setting $it.displayName to $color CT at $lev"
+                                it.setColorTemperature(color, lev)
+                            }
+                            else {
+                                if (logging) log.info "Setting $it.displayName to $lev"
+                                it.setLevel(lev)                            
+                            }          
+                        }
+                    }
+                    state.stepDown = false
+                }
+                else if (enableOn && motionOk ==true && disableLux==false && disableOn == false) {
+                    if (it.hasCapability("Color Temperature")) {
+                        if (logging) log.info "Setting $it.displayName to $color CT at $lev"
+                        it.setColorTemperature(color, lev)
+                    }
+                    else {
+                        if (logging) log.info "Setting $it.displayName to $lev"
+                        it.setLevel(lev)
+                    }
+                }   
+            }
+        }
+        if (dSwitch) {
+            if (dSwitch.currentSwitch.contains("off") && enableOn && motionOk ==true && disableLux==false && disableOn == false){
+                settings.dSwitch.each {
+                    if (it.currentSwitch.contains("off")){
+                        it.on()    
+                    }
+                }    
+            }
+        }
+    }
+    else if (disable == false){  
+        settings.dDimmer.each {
+            if (it.currentSwitch.contains("on")) {
+                Integer prevLevel = state.prevLevel["$it.id"].toInteger()
+                Integer currLevel = it.currentLevel
+                Integer stepDownLevel = lev/4
+                if (stepDownLevel == currLevel && state.stepDown == true) {
+                    if (logging) log.trace "WROG MODE but restoring after step-down $it.displayName to previous level ($prevLevel) unless 0"
+                    if (prevLevel > 0 && stepDownLevel <= currLevel) {
+                        it.setLevel(prevLevel)
+                    }
+                }
+            }
+        }
+        state.stepDown = false
+    }
+    if (evt.value == "open") {contactLeftOpen()}
+}   
+      
+def levelHandler(evt) {
+    if (logging) log.debug "executing levelHandler() - level on $evt.displayName has changed"
+    Integer evtLvl = evt.value.toInteger()
+    Integer lev = getDefaultLevel()
+    Integer stepDownLevel = lev/4
+    if (stepDownLevel < 1) stepDownLevel = 1
+        settings.dDimmer.each {
+            if (it.currentSwitch.contains("on")) {
+                Integer currLevel = evtLvl //it.currentLevel
+                if (state.prevLevel["$it.id"] == null) {
+                        if (logging) log.warn "saving current level $currLevel as previous level for $it.displayName because id = $it.id was null" 
+                        state.prevLevel["$it.id"] = currLevel
+                }
+                else {
+                    Integer prevLevel = state.prevLevel["$it.id"].toInteger()
+                    if(state.stepDown == false){
+                        if (lev > 0 && prevLevel != evtLvl && stepDownLevel != evtLvl ){ //save if not step down level
+                            state.prevLevel[it.id] = it.currentLevel                
+                        }
+                    }
+                }
+            }
+        }
+}
+
+def stepDown () {
+    if (logging) log.debug "executing stepDown()"
+    def disable = state.disabled 
+    def disableOff = state.disabledOff       
+    def getModeOk = getModeOk()
+    Integer stepDownLevel = 1
+    def stepDownTemp = false
+    def scheduleOffTemp = false
+    def motionIsActive = false
+    if (dMotionKeepOn) {
+        if (dMotionKeepOn.currentMotion.contains("active")) {
+        if (logging) log.trace "dMotionKeepOn is still active"
+            motionIsActive = true
+        }
+    }
+    else if (dMotion) { 
+        if (dMotion.currentMotion.contains("active")) {
+        if (logging) log.trace "dMotion is still active"
+            motionIsActive = true 
+        }
+    }
+            
+    if (motionIsActive == true){
+        if (logging) log.trace "one motion is still active"
+    }    
+    else if (disable == false && disableOff == false){
+        Integer lev = getDefaultLevel()
+        Integer minTurnOff = getTurnOffMin()
+        if (dDimmer){
+            if (dDimmer.currentSwitch.contains("on")){
+                scheduleOffTemp = true
+                settings.dDimmer.each {
+                    if (it.currentSwitch.contains("on")) { // if specific dimmer is on  
+                        Integer currLevel = it.currentLevel                                                            
+                        if (lev > 1) stepDownLevel = lev/4        
+                        if (stepDownLevel > 1 && stepDownLevel < currLevel){
+                            if (logging) log.info "Setting $it.displayName to step-down level ($stepDownLevel)"
+                            stepDownTemp = true //state.stepDown = true //for EACH?????
+                            it.setLevel(stepDownLevel)  
+                        }    
+                    }   
+                }   
+            }
+        }
+        else {
+            if (dSwitch){
+                if (dSwitch.currentSwitch.contains("on")){ scheduleOffTemp = true } //if any switches are on                      
+            }   
+        }
+        if (stepDownTemp == true) {state.stepDown = true}
+        if(minTurnOff > 0 && scheduleOffTemp == true) { //replaced minutes
+            if (enableOff){
+                if (logging) log.trace "Scheduling timer to turn lights off in $minTurnOff seconds"
+                runIn(minTurnOff, turnOffAction)
+            }
+            //else if (logging) log.warn "step down is disabled"
+        }
+        //else if (logging) log.warn "no minutes or scheduleOffTemp is false"
+    }
+}
+def handlerKeepOn(evt) {
+    if (logging) log.debug "executing handlerKeepOn() - $evt.displayName was ${evt.value}" 
+    unschedule() //added 2/17/2022
+}
+    
+def offHandler(evt) {
+    if (logging) log.debug "executing offHandler() - $evt.displayName was ${evt.value}"
+    unschedule(turnOffAction)
+    def disable = state.disabled //getDisabledOk()
+    def disableOff = state.disabledOff //getDisabledOffOk()    
+    def someDevOn = getLightsOff()
+
+    if (someDevOn == true) {     
+        if (disable == false && disableOff == false){
+            Integer minStepDown = getStepDownMin() ////new 
+            if(minStepDown > 0) { //REPLACED minutes
+                if (logging) log.trace "scheduling step down timer for $minStepDown seconds"
+                runIn(minStepDown, stepDown) 
+            }
+            else {
+            if (logging) log.trace "canceled timers"
+            unschedule()
+            }
+        }
+        else { 
+            if (logging) log.trace "canceling timers as off is disabled by switch ($disable) or switchOff ($disableOff)"
+            unschedule()
+        }   
+    }
+}
+
+def contactLeftOpen() {
+    if (logging) log.debug "executing contactLeftOpen()"
+    Integer minStepDown = getStepDownMin() ////new 
+    if(minStepDown > 0) { //REPLACED minutes
+        if (logging) log.trace "scheduling step down timer for $minStepDown seconds"
+        runIn(minStepDown, stepDown) 
+    }
+    else {
+    if (logging) log.trace "canceling all timers"
+        unschedule()
+    }
+}
+
+def offContactHandler(evt) {
+    if (logging) log.debug "executing offContactHandler()"     
+    unschedule()
+    def disable = state.disabled //getDisabledOk()
+    def disableOff = state.disabledOff //getDisabledOffOk()
+    
+    if (enableOff && disable == false && disableOff == false){
+    def motionIsActive = false
+    if (dMotionKeepOn) {
+        if (dMotionKeepOn.currentMotion.contains("active")) {
+        if (logging) log.trace "dMotionKeepOn is still active"
+            motionIsActive = true
+        }
+    }
+    else if (dMotion) { 
+        if (dMotion.currentMotion.contains("active")) {
+        if (logging) log.trace "dMotion is still active"
+            motionIsActive = true 
+        }
+    }
+            
+    if (motionIsActive == true){
+        if (logging) log.trace "one motion is still active"
+    }        
+        else if (disable == false && disableOff == false) turnOff ()  
+    }
+}
+
+def turnOffAction() { 
+    if (logging) log.debug "executing turnOffAction()"
+    def disable = state.disabled //getDisabledOk()
+    def disableOff = state.disabledOff //getDisabledOffOk()
+    def motionIsActive = false
+    if (dMotionKeepOn) {
+        if (dMotionKeepOn.currentMotion.contains("active")) {
+        if (logging) log.trace "dMotionKeepOn is still active"
+            motionIsActive = true
+        }
+    }
+    else if (dMotion) { 
+        if (dMotion.currentMotion.contains("active")) {
+        if (logging) log.trace "dMotion is still active"
+            motionIsActive = true 
+        }
+    }
+            
+    if (motionIsActive == true){
+        if (logging) log.trace "one motion is still active"
+    }       
+    else if (disable == false && disableOff == false) turnOff ()
+}
+
+private turnOff () {
+    if (logging) log.debug "executing turnOff()"
+    
+        if (dSwitch) {
+            settings.dSwitch.each {
+                if (it.currentSwitch.contains("on")){
+                    if (logging) log.info "Turning switch $it.displayName off"
+                    it.off()   
+                }
+                //else if (logging) log.warn "switch $it.displayName was off already"
+            }    
+        }    
+        if (dDimmer) {
+            state.stepDown = false
+            settings.dDimmer.each {
+                state.prevLevel["$it.id"] = 0
+                if (it.currentSwitch.contains("on")){
+                    if (logging) log.info "Turning dimmer $it.displayName off"
+                    it.off()
+                }
+            }
+        }  
+}
+
+private getLightsOff() {
+    result = false
+    if (dDimmer){
+        settings.dDimmer.each {
+            if (it.currentSwitch.contains("on")){result = true}
+        }
+    }
+    else if (dSwitch) {
+        settings.dSwitch.each {
+            if (it.currentSwitch.contains("on")){result = true}
+        }
+    }
+    
+    //if (logging) log.warn "Any lights on is ($result)"
+    
+	return result
+}
+
+/* ///////////////// UTILITIES START /////////////////////*/ 
+
+private getModeColor(){
+    def cMode = location.currentMode
+    def result = 2000 as int
+    switch(cMode) {
+		case "Day": 
+            result = 3700   
+            break;
+		case "Evening":
+            result = 2700   
+			break;
+		case "Night": 
+            result = 2500   
+			break;
+    }
+    return result
+}
+
+/* GET Mode Level */
+private getDefaultLevel() {    
+    def lev = settings.find{it.key == ("level" + "$location.mode")}//.value //as int
+        if (lev) {
+            result = lev.value as int 
+            //if (logging) log.info "Level for $location.mode is $result"
+        }
+        else result = 100 as int
+    return result
+}
+
+private getStepDownMin() {
+    /*WARNING THIS IS ALREADY IN SECONDS*/
+    def minStepDown
+    def minutes = settings.find{it.key == ("min" + "$location.mode")}//.value
+    if (minutes) minutes = minutes.value as int
+    
+    if(minutes > 0) {
+        if (minutes == 1) minStepDown = 30
+        else minStepDown = (minutes * 60) - 60
+    }
+    else if (minDelay) { //added else if 4/15
+        if (minDelay == 1) minStepDown = 30 //added else if 4/15
+        else minStepDown = (minDelay * 60) - 60 //added else if 4/15        
+    }
+    //if (logging) log.warn "getStepDownMin minutes is $minStepDown"
+    return minStepDown
+}
+
+private getTurnOffMin() {
+    /*WARNING THIS IS ALREADY IN SECONDS*/
+    def minTurnOff
+    def minutes = settings.find{it.key == ("min" + "$location.mode")}//.value
+    if (minutes) minutes = minutes.value as int
+    
+    if(minutes > 0) {
+        if (minutes == 1) minTurnOff = 30
+        else minTurnOff = 60
+    }
+    else if (minDelay) { //added else if 4/15
+        if (minDelay == 1) minTurnOff = 30 //added else if 4/15
+        else minTurnOff = 60 //added else if 4/15        
+    }    
+    //if (logging) log.warn "getTurnOffMin minutes is $minTurnOff"
+    
+    return minTurnOff
+}
+
+/* DELAY PER MODES */
+def getModeDelay(thisMode, modeVar) {
+	def result = input modeVar, "number", title: "> Delay for $thisMode", required: true, submitOnChange: true
+	def str = settings[modeVar]
+	if(str) setAct("   $thisMode: $str")
+}
+def setAct(str) {
+	state.actsTrue += stripBrackets("$str") + "\n"
+}
+
+/* LEVEL PER MODES */
+def getModeLevel(thisMode, modeLev) {
+	def result = input modeLev, "number", range: "0..100", title: "> Level for $thisMode", required: true, submitOnChange: true, description: "0..100"
+	def str = settings[modeLev]
+	if(str) setActLev("   $thisMode: $str")
+}
+def setActLev(str) {
+	state.actsLevTrue += stripBrackets("$str") + "\n"
+}
+
+private stripBrackets(str) {
+	return str.replace("[", "").replace("]", "")
+}
+
+/* //////////// CONTACT FIRST ///////////////// */
+
+private getMotionOk(ev) {
+    def motionEvent = ev    
+    if (contactFirst && motionEvent == "active") {
+        result = false   
+    }      
+    else result = true
+}
+
+/* ///////////////// UTILITIES END /////////////////////*/ 
+
+
+
+/* *************************************** */
+/* ****** PREVENTING TURNING ON ********** */
+/* ******************** ****************** */
+
+private checkPreventOn() { // should the light turn on? yes(true)/no(false)
+    // wrong mode doesn't turn on
+    // high lux doesn't turn on
+    // disabledOn switch on
+    // mode in list modesY    
+}
+private getModeOk() {
+	def result = !modesY || modesY.contains(location.mode)
+	return result
+}
+
+def disableOn(evt) {
+    if (evt.value == "on") { //if (disabledOn.currentSwitch.contains("on")){
+        if (logging) log.warn "disabledOn is now true"
+        state.disabledOn = true
+        app.updateLabel("🛑 $appName <span style='color:red'>Disabled by switch on</span>")
+        //unschedule()
+    }
+    else {
+        if (logging) log.warn "disabledOn is now false"
+        state.disabledOn = false
+        app.updateLabel("$state.appName")      
+    }
+}
+
+def disableLux(evt) {
+    def luxCurrent = evt.value as int
+    def luxLvl = settings.luxLevel as int 
+    result = luxCurrent >= luxLvl    
+    if (result == true) {
+        if (logging) log.warn "disabledLux is now true"
+        state.disabledLux = true
+        app.updateLabel("🔆 $appName <span style='color:blue'>Disabled by lux</span>")
+    }
+    else {
+        if (logging) log.warn "disabledOn is now false"
+        state.disabledLux = false
+        app.updateLabel("$state.appName")
+    }
+}
+
+/* *************************************** */
+/* ****** PREVENTING TURNING OFF ********** */
+/* ******************** ****************** */
+
+private checkPreventOff() { // should the light turn off, but still step-down/restore? yes(true)/no(false)
+    //disabledOff switch on   
+}
+
+def disableOff(evt) {
+    if (evt.value == "on") {//if (disabledOff.currentSwitch.contains("off")){
+        if (logging) log.warn "disabledOff is now true"
+        state.disabledOff = true
+        app.updateLabel("🛑 $appName <span style='color:red'>Disabled by switch off</span>")
+        unschedule()
+    }
+    else {
+        if (logging) log.warn "experimental, executing stepDown() when disabledOff switch is turned off"
+        state.disabledOff = false
+        stepDown ()
+        app.updateLabel("$state.appName")     
+    }
+}
+
+/* *************************************** */
+/* ****** PREVENTING RULE RUNNING ******** */
+/* ******************** ****************** */
+
+private checkPreventRun() { // should the rule run? yes(true)/no(false)
+    //disabled switch on
+}
+
+def disableH(evt) {
+    if (logging) log.debug "executing disableH()"
+
+    if (evt.value == "on") { //if (disabled.currentSwitch.contains("on")){ replaced 4/13
+        state.disabled = true
+        app.updateLabel("🛑 $appName <span style='color:red'>Disabled by switch</span>")
+        unschedule()
+    }
+    else {
+        if (logging) log.warn "experimental, executing stepDown() when disable switch is turned off"
+        state.disabled = false
+        stepDown ()
+        app.updateLabel("$state.appName")
+    }
+}
+
+private getDisabledOk() {
+    result = false
+    if (disabled.currentSwitch.contains("on")) {
+        app.updateLabel("🛑 $appName <span style='color:red'>Disabled by switch</span>")
+        result = true
+    }   
+	return result
+}
+
+private getDisabledOnOk() {
+    result = false
+    if (disabledOn.currentSwitch.contains("on")) {
+        app.updateLabel("🛑 $appName <span style='color:red'>Disabled by switch on</span>")
+        result = true
+    }
+	return result
+}
+
+private getDisabledOffOk() {
+    result = false
+    if (disabledOff.currentSwitch.contains("on")) {
+        app.updateLabel("🛑 $appName <span style='color:red'>Disabled by switch off</span>")
+        result = true
+    }    
+	return result
+}
+
+private getLuxOk() {    
+    def str = luxDev.currentIlluminance 
+    def luxCurrent = stripBrackets("$str") as int 
+    def luxLvl = settings.luxLevel as int
+    result = luxCurrent >= luxLvl
+
+    if (result == true) {
+        app.updateLabel("🔆 $appName <span style='color:blue'>Disabled by lux</span>")
+    }	
+    return result
+}
+
+Boolean getTimeOk() {
+	Boolean result = true
+	if((starting && ending) ||
+	(starting && endingX in ["Sunrise", "Sunset"]) ||
+	(startingX in ["Sunrise", "Sunset"] && ending) ||
+	(startingX in ["Sunrise", "Sunset"] && endingX in ["Sunrise", "Sunset"])) {
+		def currTime = now()
+		def start = null
+		def stop = null
+		def s = getSunriseAndSunset(sunriseOffset: startSunriseOffset, sunsetOffset: startSunsetOffset)
+		if(startingX == "Sunrise") start = s.sunrise.time
+		else if(startingX == "Sunset") start = s.sunset.time
+		else if(starting) start = timeToday(starting, location.timeZone).time    //  Crash here means time zone not set!!
+		s = getSunriseAndSunset(sunriseOffset: endSunriseOffset, sunsetOffset: endSunsetOffset)
+		if(endingX == "Sunrise") stop = s.sunrise.time
+		else if(endingX == "Sunset") stop = s.sunset.time
+		else if(ending) stop = timeToday(ending,location.timeZone).time
+		result = start < stop ? currTime >= start && currTime <= stop : currTime <= stop || currTime >= start
+	}
+//	log.trace "getTimeOk = $result"
+	return result
+}
