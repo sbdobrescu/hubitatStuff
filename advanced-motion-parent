@@ -1,0 +1,51 @@
+definition(
+	name: "Advanced Motion Lighting",
+	singleInstance: true,
+	namespace: "BD",
+	author: "Bobby Dobrescu",
+	description: "Create step-down rules to alert family members that lights are about to turn off",
+	category: "Convenience",
+	iconUrl: "",
+	iconX2Url: "",
+	installOnOpen: true
+)
+
+preferences {
+	page(name: "mainPage")
+  	page(name: "removePage")
+}
+
+def mainPage() {
+	dynamicPage(name: "mainPage", title: " ", install: true, uninstall: false) {
+		section {
+            paragraph "<h3>Advanced Motion Lighting<h3>"
+			app(name: "childButtons", appName: "AML: Advanced Motion Lighting Rule", namespace: "BD", title: "Create a new rule", multiple: true, displayChildApps: false)
+			paragraph("  ")
+			href "removePage", title: "Remove Advanced Motion Lighting", description: ""
+		}
+	}
+}
+
+def removePage() {
+	dynamicPage(name: "removePage", title: "Remove all Advanced Motion Lighting Rules", install: false, uninstall: true) {
+		section ("WARNING!\n\nRemoving  removes all Advanced Motion Lighting Rules\n") {
+		}
+	}
+}
+
+
+def installed() {
+	initialize()
+}
+
+def updated() {
+	unsubscribe()
+	initialize()
+}
+
+def initialize() {
+}
+
+
+def removeChild(ch) {
+}
