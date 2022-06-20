@@ -1,0 +1,155 @@
+/*
+* WeatherFlow
+*
+* Description:
+* This Hubitat driver polls the WeatherFlow API for your station's data for precipitation accumulation.
+* 
+* 
+*
+*/
+
+// Driver Metadata
+metadata{
+	definition( name: "WeatherFlow Weekly", namespace: "bd", author: "BobbyD") {
+		// Indicate what capabilities the device should be capable of
+		capability "Sensor"
+		capability "Refresh"     
+
+        command "GetWeekly"
+        command "resetWeekly"
+        command "resetMonthly"
+	                
+        attribute "RainThisWeek", "number" //calculated attribute
+
+    }
+    
+	preferences{
+                input name: "Token", type: "string",  title: "<font color='FF0000'><b>Token for WeatherFlow</b></font>", required: true 
+                input name: "StationID", type: "string",  title: "<font color='FF0000'><b>Station ID to be checked</b></font>", required: true
+                input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: true
+                input name: "txtEnable", type: "bool", title: "Enable descriptionText logging", defaultValue: true
+	}
+}
+
+void logsOff(){
+    log.trace "debug logging disabled..."
+    device.updateSetting("logEnable",[value:"false",type:"bool"])
+}
+
+def updated(){
+    if (logEnable) unschdule()
+    log.warn "updated..."
+    state.initName = device.displayName
+    if (logEnable) {
+        log.info "scheduling loggig to disable in an hour"
+        runIn(3600,logsOff)
+    } 
+    else {
+        log.trace "logging unscheduled"
+        unschedule(logsOff)
+    }
+    //SCHEDULING ROUTINE JOBS    
+    log.trace "scheduling daily refresh to save yesterday's data"
+    schedule('0 0 5 1/1 * ? *', sumWeekly) // once daily
+    log.trace "scheduling autoreset of weekly accumulation"
+    schedule('0 0 6 */7 * ?', resetWeekly)	// once weekly
+}
+
+// refresh performs a poll of data
+def refresh(){
+}
+
+def resetWeekly(){
+    state.lastWeeklyReset = new Date().format("MM-dd-yy h:mm a", location.timeZone)
+    state.lastWeeklyRecord = (new Date().format("MM-dd-yy", location.timeZone))-1
+    def prevValue = state.RainThisWeek as BigDecimal
+    def prevMonthValue = state.RainThisMonth as BigDecimal
+    if (prevValue > 0 ) state.RainThisMonth = prevMonthValue + prevValue
+    if (logEnable) log.debug "resetting weekly accumulation" 
+    sendEvent([name: "RainThisWeek", value: 0, unit: "in"])
+    state.RainThisWeek = 0    
+}
+
+// installed is called when the device is installed, all it really does is run updated
+def installed(){
+	log.warn "Installed..."
+	updated()
+}
+
+// initialize is called when the device is initialized, all it really does is run updated
+def initialize(){
+    log.warn "Initialized..."
+	updated()
+}
+
+
+// parse is one of those "special" methods for when data is returned.
+def parse( String description ){
+    log.warn "Parse..."
+}
+
+/************************************************
+//WEEKLY ACCUMULATION PROCESS RUNS ONCE EVERY DAY
+**************************************************/
+
+def GetWeekly() { 
+   log.debug "executing getWeekly()"
+   sumWeekly() 
+}
+
+def sumWeekly() {
+//Get WeatherFlow Forecast data
+    if (logEnable) log.debug "Getting yesterday data from WeatherFlow Better Forecast API..."
+    if( Token != null ){
+        def Params
+        Params = [ uri: "https://swd.weatherflow.com/swd/rest/better_forecast?station_id=${ StationID }&units_temp=f&units_wind=mph&units_pressure=inhg&units_precip=in&units_distance=mi&token=${ Token }", contentType: "application/json" ]            
+        asynchttpGet( "GetYesterdayRain", Params)
+    }
+}
+def GetYesterdayRain( resp, data ){
+    switch( resp.getStatus() ){
+        case 200:
+            //log.info "Raw response: ${ resp.data }"
+            if( resp.data != null ){
+                Data = parseJson( resp.data )
+                def RainThisWeekValue = Data.current_conditions.precip_accum_local_yesterday as BigDecimal
+                def prevValue = state.RainThisWeek as BigDecimal
+                def today = new Date().format("MM-dd-yy", location.timeZone)
+                def updateFlag = state.lastWeeklyRecord != today
+                if (logEnable) log.debug "updateFlag is $updateFlag"
+                if (updateFlag) {
+                    state.RainThisWeek = prevValue + RainThisWeekValue
+                    ProcessEvent( "RainThisWeek", "${ state.RainThisWeek }" )
+                    state.lastWeeklyRecord = new Date().format("MM-dd-yy", location.timeZone)
+                }
+                else if (logEnable) log.debug  "skipping because it was already updated today (updateFlag is $updateFlag)"
+                
+            } else {
+                log.warn "No data returned by WeatherFlow", 5 
+            }
+            break
+        case 401:
+             log.warn "Unauthorized, most likely due to invalid token."
+             break 
+        case 404:
+            log.warn "Station not found."
+            break   
+        default:
+    		log.warn  "Error connecting to WeatherFlow: ${ resp.status }"
+            break
+	}
+}
+
+// Process events and checks against current state value and then send an event if it has changed
+def ProcessEvent( Variable, Value, Unit = null ){        
+    if( state."${ Variable }" != Value ){
+        state."${ Variable }" = Value
+        if( Unit != null ){
+            if (txtEnable) log.debug "${ Variable } for ${device.displayName} was ${ Value }${ Unit }"
+            sendEvent( name: "${ Variable }", value: Value, unit: Unit, isStateChanged: true )
+        } else {
+            if (txtEnable) log.debug  "${ Variable } for ${device.displayName} was ${ Value }"
+            sendEvent( name: "${ Variable }", value: Value, isStateChanged: true )
+        }
+    }
+}
