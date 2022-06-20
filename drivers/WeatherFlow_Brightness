@@ -1,0 +1,181 @@
+// Driver Metadata
+metadata{
+	definition( name: "WeatherFlow Brightness", namespace: "bd", author: "BobbyD") {
+		capability 'IlluminanceMeasurement'
+        capability "Sensor"
+		capability "Refresh"
+        capability "Switch"
+        
+        command "setLux", ["NUMBER"]
+        command "refreshOn"
+        command "refreshOff"
+        
+        attribute 'Condition', 'string'
+        attribute 'Status', 'string'
+
+    }
+    
+	preferences{
+                input name: "Token", type: "string",  title: "<font color='FF0000'><b>Token for WeatherFlow</b></font>", required: true 
+                input name: "StationID", type: "string",  title: "<font color='FF0000'><b>Station ID to be checked</b></font>", required: true
+                input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: true
+                input name: "txtEnable", type: "bool", title: "Enable descriptionText logging", defaultValue: true
+	}
+}
+
+void logsOff(){
+    log.trace "debug logging disabled..."
+    device.updateSetting("logEnable",[value:"false",type:"bool"])
+}
+
+
+// updated is called whenever device parameters are saved
+def updated(){
+    if (logEnable) unschdule()
+    log.trace "Updated..."
+    state.initName = device.displayName
+    if (logEnable) {
+        if (logEnable) log.debug "scheduling loggig to disable in an hour"
+        runIn(3600,logsOff)
+    } 
+    else {
+        //log.warn "debug logging is: ${logEnable == true}"
+        if (logEnable) log.debug "logging unscheduled"
+        unschedule(logsOff)
+    }
+    refresh()
+}
+
+// installed is called when the device is installed, all it really does is run updated
+def installed(){
+	log.trace "Installed..."
+	updated()
+}
+
+// initialize is called when the device is initialized, all it really does is run updated
+def initialize(){
+    log.trace "Initialized..."
+	updated()
+}
+
+
+// parse is one of those "special" methods for when data is returned.
+def parse( String description ){
+    log.trace "Parse..."
+}
+
+// refresh performs a poll of data
+def refresh(){
+    getLux()
+}
+def refreshOn(){
+     if (logEnable) log.debug "refreshOn() pushed, scheduling refresh"
+    startScheduledRefresh()
+}
+
+void on() {
+	refreshOn()
+}
+
+def refreshOff(){
+    if (logEnable) log.debug "refreshOff() pushed, unscheduling refresh"
+    sendEvent(name: "Status", value: "Inactive", isStateChange: true)
+    unschedule(refresh)  
+}
+
+void off() {
+    refreshOff()
+}
+private startScheduledRefresh() {
+    if (logEnable) log.debug "scheduling refresh() every 5 min"  
+    runEvery5Minutes(refresh)
+    sendEvent(name: "Status", value: "Active", isStateChange: true)
+}
+
+def getLux() {
+//Get WeatherFlow Forecast data
+    if (logEnable) log.debug "Getting current brightness from  Better Forecast API..."
+    if( Token != null ){
+        def Params
+        Params = [ uri: "https://swd.weatherflow.com/swd/rest/observations/station/${ StationID }?token=${ Token }", contentType: "application/json" ] 
+        asynchttpGet( "getLuxValue", Params)
+    }
+}
+
+def getLuxValue( resp, data ){
+    switch( resp.getStatus() ){
+        case 200:
+            //log.info "Raw response: ${ resp.data }"
+            if( resp.data != null ){
+                Data = parseJson( resp.data )
+                def newValue = Data.obs[ 0 ].brightness == 0 ? 1 : Data.obs[ 0 ].brightness as Integer
+                if (logEnable) log.info "new lux value is $newValue"
+
+                def prevValue = device.currentValue("illuminance") == 0 ? 1 : device.currentValue("illuminance")
+                if (logEnable) log.info "prev lux value is $prevValue"
+                
+                def changeRatio = Math.abs((newValue - prevValue) / prevValue) 
+                if (logEnable) log.info "changeRatio is $changeRatio" 
+                
+                if (changeRatio > 0.15) {
+                    if (logEnable) log.info "Processing new luxValue ($luxValue)"
+                    setLux(newValue) //( "illuminance", luxValue, "lux" )                    
+                }
+                else if(logEnable) log.warn "skipping because change is $changeRatio %"
+                
+            } else {
+                log.warn "No data returned by WeatherFlow", 5 
+            }
+            break
+        case 401:
+             log.warn "Unauthorized, most likely due to invalid token."
+             break 
+        case 404:
+            log.warn "Station not found."
+            break   
+        default:
+    		log.warn  "Error connecting to WeatherFlow: ${ resp.status }"
+            break
+	}
+}
+
+def setLux(lux) {
+    def descriptionText = "${device.displayName} was set to $lux"
+    if (txtEnable) log.info "${descriptionText}"
+    state.lastRecord = new Date().format("MM-dd-yy", location.timeZone)
+    def currCond = getCondition(lux)
+    sendEvent(name: "Condition", value: currCond, isStateChanged: true)
+    sendEvent(name: "illuminance", value: lux, unit: "Lux", descriptionText: descriptionText, isStateChanged: true)
+}
+
+def getCondition(val) {
+    def result   
+    switch (true) {
+        case (val <= 40):
+            //state.icon = "U+FE0F"
+            device.displayName = state.initName + " 🕯️"
+            result = 'Twilight' 
+            break
+        case (val > 40)&& (val <= 10000):
+            //state.icon = "U+FE0F"
+            device.displayName = state.initName + " ☁️"
+            result = 'Overcast'
+            break
+        case (val > 10000)&&(val <= 20000):
+            //state.icon = "U+26C5"
+            device.displayName = state.initName + "  ⛅"
+            result = 'Shade' 
+            break  
+        case (val > 20000)&&(val <= 100000):
+            //state.icon = "U+FE0F"
+            device.displayName = state.initName + " ☀️"        
+            result = 'Daylight' 
+            break         
+        case (val > 100000):      
+            //state.icon = "U+1F506"
+            device.displayName = state.initName + " 🔆"
+            result = 'Sunlight' 
+            break 
+    }
+        result
+}
