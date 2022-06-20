@@ -1,0 +1,140 @@
+/*
+* WeatherFlow via WeatherUnderground
+*
+* This Hubitat driver uses the WeatherUnderground (api.weather.com) API for the station's data.
+* 
+* 
+*
+*/
+
+// Driver Metadata
+metadata{
+	definition( name: "WeatherUnderground Rain Weekly", namespace: "bd", author: "BobbyD") {
+		// Indicate what capabilities the device should be capable of
+		capability "Sensor"
+		capability "Refresh"      
+        command "GetWeekly"
+        command "resetWeekly"               
+        attribute "RainThisWeek", "number" //must be calculated
+
+    }
+    
+	preferences{
+                input name: "Token", type: "string",  title: "<font color='FF0000'><b>Token for WeatherFlow</b></font>", required: true 
+                input name: "StationID", type: "string",  title: "<font color='FF0000'><b>Station ID to be checked</b></font>", required: true
+                input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: true
+                input name: "txtEnable", type: "bool", title: "Enable descriptionText logging", defaultValue: true
+	}
+}
+
+void logsOff(){
+    log.trace "debug logging disabled..."
+    device.updateSetting("logEnable",[value:"false",type:"bool"])
+}
+
+
+// updated is called whenever device parameters are saved
+def updated(){
+    unschedule()
+    log.warn "updated..."
+    state.initName = device.displayName
+    if (logEnable) {
+        log.info "scheduling loggig to disable in an hour"
+        runIn(3600,logsOff)
+    } 
+    else {
+        //log.warn "debug logging is: ${logEnable == true}"
+        log.trace "logging unscheduled"
+        unschedule(logsOff)
+    }
+    //SCHEDULING ROUTINE JOBS
+    
+    log.info "scheduling daily refresh to save yesterday's data"
+    schedule('0 0 5 1/1 * ? *', sumWeekly) // once daily
+}
+
+// refresh performs a poll of data
+def refresh(){
+}
+
+// installed is called when the device is installed, all it really does is run updated
+def installed(){
+	log.warn "Installed..."
+	updated()
+}
+
+// initialize is called when the device is initialized, all it really does is run updated
+def initialize(){
+    log.warn "Initialized..."
+	updated()
+}
+
+
+// parse is one of those "special" methods for when data is returned.
+def parse( String description ){
+    log.warn "Parse..."
+}
+
+def resetWeekly(){
+    state.lastWeeklyReset = new Date().format("MM-dd-yy h:mm a", location.timeZone)
+    state.lastWeeklyRecord = (new Date().format("MM-dd-yy", location.timeZone))-1
+    if (logEnable) log.info "resetting weekly accumulation" 
+    sendEvent([name: "RainThisWeek", value: 0, unit: "in"])  
+}
+
+/************************************************
+//WEEKLY ACCUMULATION PROCESS RUNS ONCE EVERY DAY
+**************************************************/
+
+def GetWeekly() { 
+   if (logEnable) log.debug "executing getWeekly()"
+   sumWeekly() 
+}
+
+def sumWeekly() {
+    if (logEnable) log.debug "Getting yesterday data..."
+    if( Token != null ){
+        def today = new Date().format("MM-dd-yy", location.timeZone)
+        def updateFlag = state.lastWeeklyRecord != today
+        if (updateFlag) {
+            def Params
+            Params = [ uri: "https://api.weather.com/v2/pws/dailysummary/7day?stationId=${ StationID }&format=json&units=e&apiKey=${ Token }", contentType: "application/json" ]            
+            //https://api.weather.com/v2/pws/dailysummary/7day?stationId=KVAGLENA126&format=json&units=e&apiKey=e7cd877eccf54d1e8d877eccf58d1e72
+            asynchttpGet( "GetYesterdayRain", Params)
+        }
+        else if (logEnable) log.warn "skipping because it was already updated today (updateFlag is $updateFlag)" 
+    }
+}
+def GetYesterdayRain( resp, data ){
+    switch( resp.getStatus() ){
+        case 200:
+            if (logEnable) log.info "Raw response: ${ resp.data }"
+            if( resp.data != null ){
+                Data = parseJson( resp.data )
+                //log.info "Parsed response: ${ Data }"
+                def precipSum = 0 as BigDecimal
+                Data.summaries.each {//.imperial.each {//precipTotal.each {
+                    def day = it.obsTimeLocal
+                    def precipEach = it.imperial.precipTotal as BigDecimal
+                    if (txtEnable) log.info "Daily rain for $day was $precipEach"
+                    precipSum = precipSum + precipEach //data[obj]
+                }
+                if (txtEnable) log.info "Total accumulation for past 7 days is $precipSum" 
+                state.lastWeeklyRecord = new Date().format("MM-dd-yy", location.timeZone) //new Date().format("MM-dd-yy", location.timeZone) 
+                def RainThisWeekValue = precipSum as BigDecimal
+                sendEvent( name: "RainThisWeek", value: "${ RainThisWeekValue }", unit: "in", isStateChanged: true )           
+            } else {
+                log.warn "No data returned by WeatherUnderground", 5 
+            }
+            break
+        case 401:
+             log.warn "Unauthorized, most likely due to invalid token."
+             break 
+        case 404:
+            log.warn "Station not found."
+            break   
+        default:
+    		log.warn  "Error connecting to WeatherUnderground: ${ resp.status }"
+            break
+	}
+}
