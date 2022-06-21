@@ -33,8 +33,10 @@ void logsOff(){
 def updated(){
     if (logEnable) unschedule()
     log.trace "Updated..."
-    state.initName = device.displayName
-    state.version = 00001
+    state.initName = device.name
+    
+    setLux(0)
+    state.version = 00002
     if (logEnable) {
         if (logEnable) log.debug "scheduling loggig to disable in an hour"
         runIn(3600,logsOff)
