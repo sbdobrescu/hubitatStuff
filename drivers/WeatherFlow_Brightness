@@ -31,9 +31,10 @@ void logsOff(){
 
 // updated is called whenever device parameters are saved
 def updated(){
-    if (logEnable) unschdule()
+    if (logEnable) unschedule()
     log.trace "Updated..."
     state.initName = device.displayName
+    state.version = 00001
     if (logEnable) {
         if (logEnable) log.debug "scheduling loggig to disable in an hour"
         runIn(3600,logsOff)
@@ -118,7 +119,7 @@ def getLuxValue( resp, data ){
                 if (logEnable) log.info "changeRatio is $changeRatio" 
                 
                 if (changeRatio > 0.15) {
-                    if (logEnable) log.info "Processing new luxValue ($luxValue)"
+                    if (logEnable) log.info "Processing new luxValue ($newValue)"
                     setLux(newValue) //( "illuminance", luxValue, "lux" )                    
                 }
                 else if(logEnable) log.warn "skipping because change is $changeRatio %"
