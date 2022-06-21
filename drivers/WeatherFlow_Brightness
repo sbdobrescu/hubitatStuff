@@ -31,7 +31,7 @@ void logsOff(){
 
 // updated is called whenever device parameters are saved
 def updated(){
-    if (logEnable) unschedule()
+    if (logEnable) unschedule(logsOff)
     log.trace "Updated..."
     state.initName = device.name
     
