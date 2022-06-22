@@ -39,6 +39,7 @@ def updated(){
     state.version = 00002
     if (logEnable) {
         if (logEnable) log.debug "scheduling loggig to disable in an hour"
+        if (logEnable) log.info "current running version is $state.version"
         runIn(3600,logsOff)
     } 
     else {
