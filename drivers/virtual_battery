@@ -1,0 +1,63 @@
+// Driver Metadata
+metadata{
+	definition( name: "Virtual Battery", namespace: "bd", author: "BobbyD") {
+		capability "Sensor"
+		capability "Refresh"             
+        
+        command "setBattery", ["NUMBER"]
+        
+        attribute "Battery", "number" 
+
+    }
+    
+	preferences{
+                input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: true
+                input name: "txtEnable", type: "bool", title: "Enable descriptionText logging", defaultValue: true
+	}
+}
+
+def installed(){
+	log.warn "Installed..."
+	updated()
+}
+
+def initialize(){
+    log.warn "Initialized..."
+	updated()
+}
+
+def updated(){
+    unschedule()
+    log.warn "updated..."
+
+    if (logEnable) {
+        log.info "scheduling loggig to disable in an hour"
+        runIn(3600,logsOff)
+    } 
+    else {
+        //log.warn "debug logging is: ${logEnable == true}"
+        log.trace "logging unscheduled"
+        unschedule(logsOff)
+    }
+}
+
+def parse( String description ){
+    log.warn "Parse..."
+}
+
+
+def refresh(){
+    unschedule()
+}
+
+def setBattery(evt) {
+    if (logEnable) log.debug "executing setBattery()" 
+    def descriptionText = "${device.displayName} battery level is $evt %" 
+    sendEvent(name: "Battery", value: evt, unit: "Number", descriptionText: descriptionText, isStateChanged: true)
+}
+
+
+void logsOff(){
+    log.trace "debug logging disabled..."
+    device.updateSetting("logEnable",[value:"false",type:"bool"])
+}
