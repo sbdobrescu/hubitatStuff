@@ -1,3 +1,4 @@
+//v2
 definition(
     name: "BatteryCheck",
     namespace: "BD",
@@ -38,7 +39,8 @@ def pageStatus() {
     if (settings.level4 == null) { settings.level4 = 87 }
     
     return dynamicPage(pageProperties) {
-        settings.devices.sort { it.currentBattery }.each {  
+        if (devices) {
+            settings.devices.sort { it.currentBattery }.each {  
             try {
                 if (it.currentBattery == null) {
                     listLevel0 += "$it.displayName\n"
@@ -63,7 +65,7 @@ def pageStatus() {
                 log.trace e
                 listLevel0 += "$it.displayName\n"
             }
-        }
+            }}
         if (listLevel0) {
             section("Batteries with errors or no status") {
                 paragraph listLevel0.trim().sort
@@ -243,7 +245,7 @@ def batteryHandler(evt) {
 def send2Macro() {
     if (logging) log.info "Received request to fire the MacroDroid Webhook"     
     state.lastCallDate = lastSent
-    def url = "https://trigger.macrodroid.com/3f4fed65-a2e0-47f8-92cd-a8e088632a3c/getBatteries"   
+    def url = settings.url //"https://trigger.macrodroid.com/3f4fed65-a2e0-47f8-92cd-a8e088632a3c/getBatteries"   
     def list = state.criticalList
     def ok2Send = list.contains("All ok") // true
     if (logging) log.debug "ok2Send = $ok2Send and firstTime = $state.firstTime"
