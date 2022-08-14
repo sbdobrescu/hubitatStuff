@@ -1,4 +1,4 @@
-//v2
+//v3
 definition(
     name: "BatteryCheck",
     namespace: "BD",
@@ -68,7 +68,7 @@ def pageStatus() {
             }}
         if (listLevel0) {
             section("Batteries with errors or no status") {
-                paragraph listLevel0.trim().sort
+                paragraph listLevel0.trim()
             }
         }       
         if (listLevel1) {
@@ -272,9 +272,10 @@ def send2Macro() {
 }
 
 def callMacroDroid( resp, data ){
+    def Data = "No data"
     def lastSent = new Date().format("MM-dd-yy h:mm a", location.timeZone)
     def response = resp.getStatus()
-    def Data = resp.getData()
+    if (data) Data = resp.getData()
     if (logging) log.trace "data sent to MacroDroid and recived back resp: $response with data: $Data"
     lastCallDate = lastSent
     state.lastCallStatus = Data
