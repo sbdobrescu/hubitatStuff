@@ -1,0 +1,300 @@
+definition(
+    name: "BatteryCheck",
+    namespace: "BD",
+    author: "Bobby D.",
+    description: "Display battery levels with alerts.",
+    category: "Convenience",
+    iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",
+    iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png")
+
+preferences {
+    page name:"pageStatus"
+    page name:"pageConfigure"
+}
+
+
+// Show Status page
+def pageStatus() {
+    log.warn "executing refresh" 
+    def pageProperties = [
+        name:       "pageStatus",
+        title:      "Status",
+        nextPage:   null,
+        install:    true,
+        uninstall:  true
+    ]
+
+    def listLevel0   = "" //for devices with 0%
+    def listLevel1   = "" // critical
+    def listLevel2   = "" //low
+    def listLevel3   = "" //medium
+    def listLevel4   = "" //
+    def listLevel5   = "" //for devices with 100%
+    def listCritical = []
+    state.critical = ""
+    def macroList = [] 
+    if (settings.level1 == null) { settings.level1 = 33 }
+    if (settings.level3 == null) { settings.level3 = 67 }
+    if (settings.level4 == null) { settings.level4 = 87 }
+    
+    return dynamicPage(pageProperties) {
+        settings.devices.sort { it.currentBattery }.each {  
+            try {
+                if (it.currentBattery == null) {
+                    listLevel0 += "$it.displayName\n"
+                } else if (it.currentBattery >= 0 && it.currentBattery <  settings.level1.toInteger()) {
+                    listCritical += it.displayName                 
+                    listLevel1 += "$it.currentBattery  $it.displayName\n"
+                    if (logging)  log.trace "adding $it.displayName to macroList"
+                    macroList += "$it.displayName"
+                } else if (it.currentBattery >= settings.level1.toInteger() && it.currentBattery <= settings.level3.toInteger()) {
+                    listLevel2  += "$it.currentBattery  $it.displayName\n" 
+                } else if (it.currentBattery >  settings.level3.toInteger() && it.currentBattery <= settings.level4.toInteger()) {
+                    listLevel3  += "$it.currentBattery  $it.displayName\n" 
+                } else if (it.currentBattery > settings.level4.toInteger() && it.currentBattery < 100) {
+                    listLevel4 += "$it.currentBattery $it.displayName\n"
+                } else if (it.currentBattery ==  100) {
+                    listLevel5 += "$it.currentBattery $it.displayName\n"                               
+                } else {
+                    listLevel0 += "$it.currentBattery  $it.displayName\n"
+                }
+            } catch (e) {
+                log.trace "Caught error checking battery status."
+                log.trace e
+                listLevel0 += "$it.displayName\n"
+            }
+        }
+        if (listLevel0) {
+            section("Batteries with errors or no status") {
+                paragraph listLevel0.trim().sort
+            }
+        }       
+        if (listLevel1) {
+            section("<span style='color:red'>Batteries with critical charge (less than $settings.level1)</span>") {
+                paragraph listLevel1.trim()
+                state.critical = "$listCritical ($listCritical.size)"
+                state.criticalCount = "$listCritical.size"
+                if (logging)  log.trace "listCritical= $listCritical AND macroList =  $macroList"
+                
+                def str = macroList.toString()
+                def noBrackets =  str.replace("[", "").replace("]", "")
+                state.criticalList = noBrackets
+            }
+        }
+        if (listLevel2) {
+            section("Batteries with <span style='color:purple'>low</span> charge (between $settings.level1 and $settings.level3)") {
+                def myList = listLevel2.trim()
+                paragraph myList
+            }
+        }
+        if (listLevel3) {
+            section("Batteries with <span style='color:orange'>medium</span> charge (between $settings.level3 and $settings.level4)") {
+                paragraph listLevel3.trim()
+            }
+        }
+        if (listLevel4) {
+            section("Batteries with <span style='color:green'>high</span> charge (more than $settings.level4)") {
+                paragraph listLevel4.trim()
+            }
+        }
+        if (listLevel5) {
+            section("Batteries with 100%") {
+                paragraph listLevel5.trim()
+            }
+        }
+        if (logging)  log.trace "compiled lists, checking name"   
+        checkName()
+        section("") {
+            href "pageStatus", title:"Refresh", description:""
+            href "pageConfigure", title:"Configure", description:""
+        }
+    }
+}
+// Show Configure Page
+def pageConfigure() {
+    def helpPage =        
+        "Select devices with batteries that you wish to display."
+
+    def inputBattery   = [
+        name:           "devices",
+        type:           "capability.battery",
+        title:          "Which devices with batteries?",
+        multiple:       true,
+        required:       false,
+        submitOnChange: true
+    ]
+
+    def inputLevel1    = [
+        name:           "level1",
+        type:           "number",
+        title:          "Critical battery threshold?",
+        defaultValue:   "20",
+        required:       true
+    ]
+
+    def inputLevel3    = [
+        name:           "level3",
+        type:           "number",
+        title:          "Low battery threshold?",
+        defaultValue:   "70",
+        required:       true
+    ]
+    def inputLevel4    = [
+        name:           "level4",
+        type:           "number",
+        title:          "Medium battery threshold?",
+        defaultValue:   "90",
+        required:       true
+    ]  
+    def pageProperties = [
+        name:           "pageConfigure",
+        title:          "Configuration",
+        nextPage:       "pageStatus",
+        uninstall:      true
+    ]
+    def notifDevice   = [
+        name:           "macroD",
+        type:           "bool",
+        title:          "Use MacroDroid?",
+        submitOnChange: true
+    ]
+    def macroDroid   = [
+        name:           "url",
+        type:           "text",
+        title:          "<font color='FF0000'><b>MacroDroid url</b></font>",
+        submitOnChange: true
+    ]    
+    def pushDevice   = [
+        name:           "pushD",
+        type:           "capability.notification",
+        title:          "Select notification device",
+        submitOnChange: true
+    ]    
+    
+
+    return dynamicPage(pageProperties) {
+        section("Devices") {
+            input inputBattery
+        }
+        
+        section("Settings") {
+            input inputLevel1
+            input inputLevel3
+            input inputLevel4
+            input notifDevice
+            if (macroD) input macroDroid
+            input pushDevice
+        }       
+        section("") {
+            input "appName", "text", title: "Name this app", submitOnChange: true
+                if(appName) {
+                    app.updateLabel("$appName")
+                    state.appName = appName
+                    checkName()
+                }
+            input "logging", "bool", title: "Enable logging", width: 6
+        }
+    }
+}
+
+def installed() {
+    log.debug "Installed with settings: ${settings}"
+    state.critical = ""
+    initialize()
+}
+
+def updated() {
+    unschedule()
+    unsubscribe()
+    initialize()
+    
+}
+
+def initialize() {
+    log.debug "Initialized with settings: ${settings}"
+    state.firstTime = 0
+    subscribe(devices, "battery", batteryHandler)  
+}
+def batteryHandler(evt) {
+    def not = evt.descriptionText
+    def alert = not.contains("low")
+    def alertLvl = evt.value?.toInteger()
+    if (logging) log.debug "received event:  $evt.descriptionText"
+    if(batteryLevel != null && alertLvl < level1) {
+        state.critical = "ALERT: $evt.descriptionText"
+        state.criticalList = "From Hubitat: $evt.descriptionText"
+        state.criticalCount = 1
+        if (logging) log.debug "Sending push notification $criticalList"
+        if(pushD) pushD.deviceNotification("${state.criticalList}")
+        checkName()
+        
+    }
+    else {
+        if (alert) {
+        state.critical = "ALERT: $evt.descriptionText"
+        state.criticalList = "From Hubitat: $evt.descriptionText"
+        state.criticalCount = 1
+        if(pushD) pushD.deviceNotification("${state.criticalList}")
+        checkName()   
+        }
+    }
+}
+
+def send2Macro() {
+    if (logging) log.info "Received request to fire the MacroDroid Webhook"     
+    state.lastCallDate = lastSent
+    def url = "https://trigger.macrodroid.com/3f4fed65-a2e0-47f8-92cd-a8e088632a3c/getBatteries"   
+    def list = state.criticalList
+    def ok2Send = list.contains("All ok") // true
+    if (logging) log.debug "ok2Send = $ok2Send and firstTime = $state.firstTime"
+    if (ok2Send == false || (ok2Send == true && state.firstTime == 1 )) {
+        
+        def varA = "attribute1"
+        def varB = "attribute2"
+        def count = state.criticalCount
+        if (list) {
+            list = list.replace(" ", "%20")
+        } 
+        
+        def Params
+            if(list) {
+                Params = [ uri: "$url?${ varA }=${ count }&${ varB }=${ list }", contentType: "text/plain" ]
+            }
+            else Params = [ uri: "$url?${ varA }=${ count }", contentType: "text/plain" ]
+        
+        if (logging) log.info "Calling webhook with Params: $Params"    
+        
+        asynchttpGet("callMacroDroid", Params)
+
+    }
+}
+
+def callMacroDroid( resp, data ){
+    def lastSent = new Date().format("MM-dd-yy h:mm a", location.timeZone)
+    def response = resp.getStatus()
+    def Data = resp.getData()
+    if (logging) log.trace "data sent to MacroDroid and recived back resp: $response with data: $Data"
+    lastCallDate = lastSent
+    state.lastCallStatus = Data
+}
+
+
+
+
+private checkName() {
+    if (logging) log.debug "executing checkName()"
+    if (state.critical) {
+        app.updateLabel("$state.appName <span style='color:red'>Critical: $state.critical</span>")
+        state.firstTime = 0
+    }
+    else {
+        app.updateLabel("$state.appName <span style='color:green'>No low levels</span>")
+        state.criticalList = "All ok"
+        state.criticalCount = 0
+        if(state.firstTime == null) state.firstTime = 0
+        firstTimeCount = state.firstTime.toInteger()
+        state.firstTime = firstTimeCount+1
+        
+    }
+    send2Macro()
+}
