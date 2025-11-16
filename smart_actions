@@ -1,0 +1,651 @@
+/*  ✨ Smart Actions for Modes, Buttons and Switches (Rules) v3.5.6
+ *  Author: Bobby Dobrescu
+ *
+ *  Summary of changes since v3.5.3
+ *   • Split custom LED control:
+ *       - customLedBlue   → Modern (Inovelli Blue) only
+ *       - customLedLegacy → Legacy (LED Color) only
+ *     Behavior matrix:
+ *       - Blue-only custom → Blue uses custom, Legacy uses default RED on ON; OFF restores per-mode color.
+ *       - Legacy-only custom → Legacy uses custom, Blue uses default RED on ON; OFF restores per-mode color.
+ *       - Both custom → both generations use custom.
+ *       - Neither → Standard LED behavior (RED on ON, per-mode on OFF).
+ *   • OFF-event clarity: adds "Restoring legacy LEDs to <Mode> color." debug for easier trace reading.
+ *   • Retains: LED Calibration Helper, per‑mode actions (Day/Evening/Night/Away), previews, summaries, counts,
+ *              button & switch triggers, notifications/TTS/locks/dimmers, safety logging, and trace helpers.
+ */
+
+definition(
+    name        : "✨ Smart Actions for Modes, Buttons and Switches (Rules)",
+    namespace   : "BD",
+    author      : "Bobby Dobrescu",
+    description : "Unified rule: react to modes, buttons, and switches",
+    parent      : "BD:✨ Smart Actions for Modes, Buttons and Switches",
+    category    : "Convenience",
+    iconUrl     : "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",
+    iconX2Url   : "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png"
+)
+
+preferences {
+    page(name: "mainPage")
+    page(name: "previewDayPage")
+    page(name: "previewEveningPage")
+    page(name: "previewNightPage")
+    page(name: "previewAwayPage")
+    page(name: "previewAllModesPage")
+    page(name: "testLedPage")
+    page(name: "previewCalibrationPage")
+    page(name: "applyCalibrationPage")
+}
+
+/* ===================== MAIN PAGE ===================== */
+def mainPage() {
+    dynamicPage(name: "mainPage", title: " ", install: true, uninstall: true) {
+
+        /* 1) Rule Name */
+        section("<b>Rule Name</b>") {
+            input "appName", "text", title:"Name this rule", submitOnChange:true
+            if (appName) app.updateLabel("✨ ${appName}")
+        }
+
+        /* 2) Summary (collapsible) */
+        section("<b>Summary</b>", hideable:true, hidden:true) {
+            paragraph summaryHtml()
+        }
+
+        /* 3) Triggers */
+        section("<b>Triggers</b>") {
+            input "reactToModes",    "bool", title:"React to Mode changes",   defaultValue:false, submitOnChange:true, width:4
+            input "reactToButtons",  "bool", title:"React to Button presses", defaultValue:false, submitOnChange:true, width:4
+            input "reactToSwitches", "bool", title:"React to Switch events",  defaultValue:false, submitOnChange:true, width:4
+        }
+
+        /* 4) Inovelli Global Settings headline */
+        section("") { paragraph "<b>Inovelli Global Settings</b>" }
+
+        /* 4a) LED Calibration Helper (collapsible) */
+        section("<b>LED Calibration Helper</b>", hideable:true, hidden:true) {
+            paragraph "Tune and preview LED colors without changing your automation logic. Works with Inovelli Blue and Legacy LED Color devices."
+            input "calHue",      "number", title:"Hue (0–360)",           defaultValue:(customHueD ?: 76),  range:"0..360", submitOnChange:true
+            input "calSat",      "number", title:"Saturation (0–100)",     defaultValue:(customSat  ?: 96),  range:"0..100", submitOnChange:true
+            input "calLevel",    "number", title:"Level (0–100)",         defaultValue:(customLevel ?: 91), range:"0..100", submitOnChange:true
+            input "calEffect",   "number", title:"Effect (Blue only; 1=Solid)", defaultValue:(ledEffect ?: 1), range:"0..255", submitOnChange:true
+            input "calDuration", "number", title:"Duration (Blue only; 0–255; 255=Forever)", defaultValue:(ledDuration ?: 255), range:"0..255", submitOnChange:true
+            href(name:"previewCalibration", title:"🎨 Preview", page:"previewCalibrationPage", description:"Send preview to selected devices now")
+            href(name:"applyCalibration",   title:"🌀 Apply to All Selected Devices", page:"applyCalibrationPage", description:"Apply calibration to Blue + Legacy devices")
+        }
+
+        /* 4b) Modern (Blue) devices & custom LED split */
+        section("<b>Inovelli Blue Devices & LED Control</b>", hideable:true, hidden:true) {
+            input "blueDevices", "capability.switchLevel", title:"Select Inovelli Blue devices", multiple:true
+            input "customLedBlue", "bool", title:"Enable Custom LED for Inovelli Blue (Modern)", defaultValue:false, submitOnChange:true
+
+            // Show LED customization sliders when either Blue or Legacy custom LED is enabled
+            if (customLedBlue || customLedLegacy) {
+                paragraph "🎨 Configure LED appearance (shared by both Blue and Legacy custom modes)"
+                input "ledEffect",   "number", title:"Effect (1 = solid)", defaultValue:(ledEffect ?: 1)
+                input "ledLevel",    "number", title:"LED Level (0–100)", defaultValue:(ledLevel ?: 100)
+                input "ledDuration", "number", title:"Duration (0–255; 255 = forever)", defaultValue:(ledDuration ?: 255)
+                input "customHueD",  "number", title:"Hue (0–360)", defaultValue:(customHueD ?: 76)
+                input "customSat",   "number", title:"Saturation (0–100)", defaultValue:(customSat ?: 96)
+                input "customLevel", "number", title:"Level (0–100)", defaultValue:(customLevel ?: 91)
+            }
+        }
+
+        /* 4c) Legacy devices groups + custom LED split */
+        section("<b>Legacy Inovelli Red Devices</b>", hideable:true, hidden:true) {
+            input "legacyWhite",  "capability.switch", title:"⚪️ Select Day Color (Notification 4 – White)",   multiple:true
+            input "legacyBlue",   "capability.switch", title:"🔵 Select Evening Color (Notification 3 – Blue)", multiple:true
+            input "legacyGreen",  "capability.switch", title:"🟢 Select Night Color (Notification 2 – Green)",  multiple:true
+            input "legacyOrange", "capability.switch", title:"🟠 Select Away Color (Notification 5 – Orange)",  multiple:true
+            input "legacyRed",    "capability.switch", title:"🔴 Select All-Modes / Default (Notification 1 – Red)", multiple:true
+
+            input "legacyCustom", "capability.switch", title:"⚫️ Select Legacy (LED Color) Devices (RGBW Components)", multiple:true, submitOnChange:true
+            input "customLedLegacy", "bool", title:"Enable Custom LED for Legacy (LED Color)", defaultValue:false, submitOnChange:true
+
+            if (legacyCustom || customLedLegacy) {
+                input "legacyAllNotifs", "capability.switch", title:"🧹 Legacy Notifications (1–5) to turn OFF before Custom LED", multiple:true
+            }
+        }
+
+        /* 4d) Preview actions for LEDs */
+        section("<b>Preview Inovelli Actions</b>", hideable:true, hidden:true) {
+            input "testHueMode","enum",title:"Select hue to test", options:["Day","Evening","Night","Away","Custom"], defaultValue:"Day"
+            href(name:"testLed", title:"💡 Test LED Effect", page:"testLedPage", description:"Run immediately")
+        }
+
+        /* Count line */
+        section("") { paragraph ledCountsLine() }
+
+        /* 5) Button Triggers */
+        if (reactToButtons) {
+            section("<b>Button Triggers</b>", hideable:true, hidden:true) {
+                input "buttonDev","capability.pushableButton",title:"Select Button Device(s)",multiple:true,submitOnChange:true
+                input "buttonNumbers","text",title:"Button numbers (e.g. 1,2,3)",submitOnChange:true
+                input "buttonEvents","enum",title:"Button events",multiple:true,
+                        options:["pushed","held","released"],defaultValue:["pushed"]
+            }
+        }
+        if (buttonDev) section("") { paragraph "💠 ${buttonDev.size()} button device(s) selected" }
+
+        /* 6) Switch Triggers */
+        if (reactToSwitches) {
+            section("<b>Switch Triggers</b>", hideable:true, hidden:true) {
+                input "triggerSwitches","capability.switch",title:"Select Trigger Switch(es)",multiple:true,submitOnChange:true
+                input "switchTriggerType","enum",title:"Trigger When",options:["on","off","both"],defaultValue:"on"
+            }
+            if (triggerSwitches) section("") { paragraph "🔌 ${triggerSwitches.size()} trigger switch(es) selected" }
+        }
+
+        /* 7) Per‑Mode actions */
+        if (reactToModes) {
+            section("<b>Buttons and Switches Actions (Per‑Mode)</b>") {
+                paragraph "Configure each mode below."
+            }
+            modeSection("Day",     "☀️ Day")
+            modeSection("Evening", "🌆 Evening")
+            modeSection("Night",   "🌙 Night")
+            modeSection("Away",    "🚗 Away")
+
+            section("") { paragraph modeTotalsLine() }
+
+            section("<b>Preview Per‑Mode Actions</b>", hideable:true, hidden:true) {
+                href(name:"prevDay",     title:"▶️ Preview Day",     page:"previewDayPage",     description:"Run 'Day' actions now")
+                href(name:"prevEvening", title:"▶️ Preview Evening", page:"previewEveningPage", description:"Run 'Evening' actions now")
+                href(name:"prevNight",   title:"▶️ Preview Night",   page:"previewNightPage",   description:"Run 'Night' actions now")
+                href(name:"prevAway",    title:"▶️ Preview Away",    page:"previewAwayPage",    description:"Run 'Away' actions now")
+            }
+        }
+
+        /* 8) All‑Modes (used by Standard ON) */
+        section("<b>Buttons and Switches Actions (All Modes)</b>", hideable:true, hidden:true) {
+            input "buttonSwitchesOn",  "capability.switch",      title:"Turn ON",  multiple:true, submitOnChange:true
+            input "buttonSwitchesOff", "capability.switch",      title:"Turn OFF", multiple:true, submitOnChange:true
+            input "buttonDimmers",     "capability.switchLevel", title:"Dimmers",  multiple:true, submitOnChange:true
+            if (buttonDimmers) input "buttonDimLevel","number", title:"Dimmer Level %", defaultValue:50
+            input "buttonLocks","capability.lock", title:"Locks", multiple:true
+
+            input "buttonNotify","capability.notification",title:"Notification devices",multiple:true
+            if (buttonNotify) input "buttonNotifyMessage","text",title:"Notification Message",defaultValue:"Button or switch action executed."
+            input "buttonTTS","capability.speechSynthesis",title:"TTS devices",multiple:true
+            if (buttonTTS) input "buttonTTSVolume","number",title:"TTS Volume",defaultValue:50
+            if (buttonTTS) input "buttonTTSMessage","text",title:"TTS Message",defaultValue:"Button or switch action executed."
+        }
+        section("<i>Tip: Standard ON uses the All‑Modes 'Turn ON' and 'Dimmers' above. OFF uses the Per‑Mode blocks (if enabled).</i>") { }
+        section("") { paragraph allModesCountsLine() }
+
+        /* 9) App Settings */
+        section("<b>App Settings</b>") {
+            input "enableLogging","bool", title:"Enable Debug/Info Logging", defaultValue:true
+            input "traceMode",    "bool", title:"Enable Trace Logging",      defaultValue:false
+        }
+    }
+}
+
+/* ========== Per‑Mode Section Builder ========== */
+private modeSection(modeName, label) {
+    def letter = modeName[0]
+    section("<b>${label}</b>", hideable:true, hidden:true) {
+        input "enabled${modeName}", "bool", title:"Enable ${modeName}", defaultValue:false, submitOnChange:true
+
+        input "switchesOn${letter}",  "capability.switch",      title:"Turn ON",           multiple:true, submitOnChange:true
+        input "switchesOff${letter}", "capability.switch",      title:"Turn OFF",          multiple:true, submitOnChange:true
+        input "dimmersLvl${letter}",  "capability.switchLevel", title:"Dimmers",           multiple:true, submitOnChange:true
+        if (settings["dimmersLvl${letter}"]) input "dimmerValue${letter}", "number", title:"Dimmer Level %", defaultValue:50
+        input "locks${letter}",       "capability.lock",        title:"Locks",             multiple:true, submitOnChange:true
+
+        input "notify${letter}",      "capability.notification",    title:"Notification (${modeName})", multiple:true
+        if (settings["notify${letter}"]) input "notifyMessage${letter}", "text",   title:"Notification Message (${modeName})", defaultValue:"Running ${modeName} actions."
+        input "tts${letter}",         "capability.speechSynthesis", title:"TTS (${modeName})", multiple:true
+        if (settings["tts${letter}"])  input "ttsVolume${letter}",   "number", title:"TTS Volume (${modeName})", defaultValue:50
+        if (settings["tts${letter}"])  input "ttsMessage${letter}",  "text",   title:"TTS Message (${modeName})", defaultValue:"Running ${modeName} actions."
+    }
+    section("") { paragraph modeCountsLine(letter) }
+}
+
+/* ===================== LIFECYCLE ===================== */
+def installed() { initialize() }
+def updated()   { unsubscribe(); unschedule(); initialize() }
+
+def initialize() {
+    if (reactToModes)    subscribe(location, "mode", modeHandler)
+    if (reactToButtons)  subscribeButtons()
+    if (reactToSwitches) subscribe(triggerSwitches, "switch", switchHandler)
+    if (enableLogging)   runIn(1800, "logsOff")
+    logInfo "Initialized ${app.label}"
+}
+
+/* ===================== SUBSCRIPTIONS ===================== */
+private subscribeButtons() {
+    if (!buttonDev || !buttonEvents || !buttonNumbers) return
+    def nums = buttonNumbers.split(",")*.trim()*.toInteger()
+    buttonEvents.each { ev -> nums.each { n -> subscribe(buttonDev, "${ev}.${n}", btnActions) } }
+    logDebug "Subscribed to button events ${buttonEvents} on ${buttonDev} for buttons ${nums}"
+}
+
+/* ===================== EVENT HANDLERS ===================== */
+def modeHandler(evt) {
+    if (!reactToModes) return
+    logInfo "Mode changed → ${evt.value}"
+    runPerMode(evt.value, "mode")
+}
+
+def btnActions(evt) {
+    if (!reactToButtons) return
+    logInfo "Button: ${evt.device} ${evt.name} → ${evt.value}"
+
+    // Immediate LED feedback per-generation
+    if (customLedBlue || customLedLegacy) setCustomLedImmediateIfEnabled()
+
+    if (!reactToModes) { runAllModeActions(); return }
+    runPerMode(location.mode, "button")
+}
+
+def switchHandler(evt) {
+    if (!reactToSwitches) return
+    logInfo "Switch: ${evt.device.displayName} → ${evt.value}"
+
+    def shouldRun = (switchTriggerType == evt.value) || (switchTriggerType == "both")
+    if (!shouldRun) return
+
+    if (switchTriggerType == "both") {
+        if (evt.value == "on") {
+            logDebug "Switch=ON, 'both' → Standard ON actions (LED red/custom by generation)."
+            runStandardOnActions()
+        } else {
+            if (reactToModes) {
+                logDebug "Switch=OFF, 'both' → Per‑Mode OFF actions (${location.mode})"
+                runPerMode(location.mode, "off")
+            } else {
+                logInfo "Per‑Mode is disabled; OFF in 'both' does nothing. (Tip: enable React to Mode changes to use OFF per‑mode.)"
+            }
+        }
+        return
+    }
+
+    if (evt.value == "on") {
+        logDebug "Switch=ON → Standard ON actions (LED red/custom by generation)."
+        runStandardOnActions()
+    } else {
+        if (reactToModes) {
+            logDebug "Switch=OFF → Per‑Mode OFF actions (${location.mode})"
+            runPerMode(location.mode, "off")
+        } else {
+            logInfo "Per‑Mode is disabled; OFF does nothing."
+        }
+    }
+}
+
+/* ===================== ACTION RUNNERS ===================== */
+private runStandardOnActions() {
+    // All‑Modes ON actions
+    safeCmd(buttonSwitchesOn, "on")
+    if (buttonDimmers) {
+        Integer lvl = safeInt(buttonDimLevel, 50)
+        buttonDimmers.each { safeCmd(it, "setLevel", [lvl]) }
+    }
+    safeCmd(buttonLocks, "lock")
+
+    // LED behavior matrix
+    if (customLedBlue || customLedLegacy) {
+        setCustomLedImmediateIfEnabled()
+    } else {
+        // Default: Blue+Legacy → RED
+        pauseExecution(150) // small gap helps Blue accept LED effect after device events
+        if (blueDevices) {
+            Integer redByte = hueToByte(10)
+            blueDevices.each { safeCmd(it, "ledEffectAll", [1, redByte, 100, 255]) }
+            logDebug "Standard ON → Blue LEDs set to RED (hue 10)."
+        }
+        if (legacyAllNotifs) {
+            logDebug "Turning OFF all legacy Notifications before RED."
+            safeCmd(legacyAllNotifs, "off")
+            pauseExecution(150)
+        }
+        safeCmd(legacyRed, "on")
+        logDebug "Standard ON → Legacy LEDs set to RED."
+    }
+
+    if (buttonNotify) buttonNotify.each { safeCmd(it, "deviceNotification", [buttonNotifyMessage ?: "Standard ON actions executed."]) }
+    if (buttonTTS)    buttonTTS.each    { safeCmd(it, "speak", [buttonTTSMessage ?: "Standard ON actions executed."]) }
+
+    logInfo "Executed Standard ON actions."
+}
+
+private runPerMode(modeVal, evtVal="on") {
+    switch(modeVal) {
+        case "Day":     if (enabledDay)     runDay(evtVal);     break
+        case "Evening": if (enabledEvening) runEvening(evtVal); break
+        case "Night":   if (enabledNight)   runNight(evtVal);   break
+        case "Away":    if (enabledAway)    runAway(evtVal);    break
+        default:
+            logDebug "No per‑mode block enabled for '${modeVal}'."
+    }
+}
+
+private runAllModeActions() {
+    safeCmd(buttonSwitchesOn,  "on")
+    safeCmd(buttonSwitchesOff, "off")
+    if (buttonDimmers) {
+        Integer lvl = safeInt(buttonDimLevel, 50)
+        buttonDimmers.each { safeCmd(it, "setLevel", [lvl]) }
+    }
+    safeCmd(buttonLocks, "lock")
+
+    // Default LED feedback for All‑Modes test
+    if (blueDevices) {
+        def red = hueToByte(10)
+        blueDevices.each { safeCmd(it, "ledEffectAll", [1, red, 100, 255]) }
+    }
+    safeCmd(legacyRed, "on")
+
+    if (buttonNotify) buttonNotify.each { safeCmd(it, "deviceNotification", [buttonNotifyMessage ?: "Button or switch action executed."]) }
+    if (buttonTTS)    buttonTTS.each    { safeCmd(it, "speak", [buttonTTSMessage ?: "Button or switch action executed."]) }
+
+    logInfo "Executed All‑Modes actions."
+}
+
+/* Per‑Mode helpers */
+def runDay(evtVal="on")     { runModeBlock("Day",     evtVal, switchesOnD, switchesOffD, dimmersLvlD, dimmerValueD, locksD, legacyWhite,  360, notifyD, notifyMessageD, ttsD, ttsMessageD, ttsVolumeD) }
+def runEvening(evtVal="on") { runModeBlock("Evening", evtVal, switchesOnE, switchesOffE, dimmersLvlE, dimmerValueE, locksE, legacyBlue,   241, notifyE, notifyMessageE, ttsE, ttsMessageE, ttsVolumeE) }
+def runNight(evtVal="on")   { runModeBlock("Night",   evtVal, switchesOnN, switchesOffN, dimmersLvlN, dimmerValueN, locksN, legacyGreen,  120, notifyN, notifyMessageN, ttsN, ttsMessageN, ttsVolumeN) }
+def runAway(evtVal="on")    { runModeBlock("Away",    evtVal, switchesOnA, switchesOffA, dimmersLvlA, dimmerValueA, locksA, legacyOrange, 10,  notifyA, notifyMessageA, ttsA, ttsMessageA, ttsVolumeA) }
+
+private runModeBlock(name, evtVal, onL, offL, dimL, dimVal, lockL, legacyGroup, blueHueDefault, notif, notifMsg, tts, ttsMsg, ttsVol) {
+    logInfo "Running ${name} (${evtVal}) actions"
+
+    if (evtVal == "off") {
+        // OFF branch → per‑mode OFF
+        safeCmd(offL, "off")
+        if (blueDevices) setLedColor(blueHueDefault, name)
+
+        if (legacyAllNotifs) {
+            logDebug "Turning OFF legacy RED before setting ${name} color."
+            safeCmd(legacyRed, "off")
+            pauseExecution(150)
+        }
+        if (legacyGroup) {
+            logDebug "Restoring legacy LEDs to ${name} color."
+            safeCmd(legacyGroup, "on")
+        }
+
+        if (notif) notif.each { safeCmd(it, "deviceNotification", [notifMsg ?: "${name} OFF actions executed."]) }
+        if (tts)   tts.each   { safeCmd(it, "speak", [ttsMsg ?: "${name} OFF actions executed."]) }
+        return
+    }
+
+    // ON branch → per‑mode ON
+    safeCmd(onL,  "on")
+    if (dimL) {
+        Integer lvl = safeInt(dimVal, 50)
+        dimL.each { safeCmd(it, "setLevel", [lvl]) }
+    }
+    safeCmd(lockL, "lock")
+
+    if (blueDevices) setLedColor(blueHueDefault, name)
+    if (legacyAllNotifs) {
+        logDebug "Turning OFF all legacy Notifications before ${name} color."
+        safeCmd(legacyAllNotifs, "off")
+        pauseExecution(150)
+    }
+    if (legacyGroup) safeCmd(legacyGroup, "on")
+
+    if (notif) notif.each { safeCmd(it, "deviceNotification", [notifMsg ?: "Running ${name} actions."]) }
+    if (tts)   tts.each   { safeCmd(it, "speak", [ttsMsg ?: "Running ${name} actions."]) }
+}
+
+/* ===================== PREVIEW PAGES ===================== */
+def previewDayPage()      { dynamicPage(name:"previewDayPage",     title:"Preview Day")       { section { paragraph "Running Day...";      runIn(1, "runDay")             }}}
+def previewEveningPage()  { dynamicPage(name:"previewEveningPage", title:"Preview Evening")   { section { paragraph "Running Evening...";  runIn(1, "runEvening")         }}}
+def previewNightPage()    { dynamicPage(name:"previewNightPage",   title:"Preview Night")     { section { paragraph "Running Night...";    runIn(1, "runNight")           }}}
+def previewAwayPage()     { dynamicPage(name:"previewAwayPage",    title:"Preview Away")      { section { paragraph "Running Away...";     runIn(1, "runAway")            }}}
+def previewAllModesPage() { dynamicPage(name:"previewAllModesPage",title:"Preview All Modes") { section { paragraph "Running All Modes..."; runIn(1, "runAllModeActions")  }}}
+def testLedPage()         { dynamicPage(name:"testLedPage",        title:"Test LED Effect")   { section { paragraph "Testing LED...";      runIn(1, "testLedNow")         }}}
+def previewCalibrationPage(){ dynamicPage(name:"previewCalibrationPage", title:"LED Preview") { section { paragraph "Sending preview...";   runIn(1, "previewCalibrationNow") }}}
+def applyCalibrationPage(){ dynamicPage(name:"applyCalibrationPage", title:"Apply Calibration"){ section { paragraph "Applying to all selected devices..."; runIn(1, "applyCalibrationNow") }}}
+
+/* LED Test runner */
+def testLedNow() {
+    def mode = testHueMode ?: "Day"
+    logInfo "Testing LED for ${mode}"
+
+    def hue = getHue(mode)
+    if (blueDevices) {
+        Integer colorByte = hueToByte(hue)
+        blueDevices.each { safeCmd(it, "ledEffectAll", [1, colorByte, 100, 255]) }
+    }
+
+    if (mode == "Custom" && legacyCustom) {
+        if (legacyAllNotifs) {
+            logDebug "Turning off ${legacyAllNotifs.size()} legacy Notification devices before Custom LED color (test)."
+            safeCmd(legacyAllNotifs, "off")
+            pauseExecution(250)
+        }
+        def h = customHueD ?: 76
+        def s = customSat  ?: 96
+        def l = customLevel ?: 91
+        legacyCustom.each { safeCmd(it, "setColor", [hue:h, saturation:s, level:l]) }
+    } else {
+        def target = []
+        switch (mode) {
+            case "Day":     target = legacyWhite;  break
+            case "Evening": target = legacyBlue;   break
+            case "Night":   target = legacyGreen;  break
+            case "Away":    target = legacyOrange; break
+            default:        target = legacyRed;    break
+        }
+        safeCmd(target, "on")
+    }
+
+    logInfo "Test LED executed for ${mode}"
+}
+
+/* LED Calibration Helper Runners */
+def previewCalibrationNow() {
+    Integer h  = safeInt(calHue,      (customHueD ?: 76))
+    Integer s  = safeInt(calSat,      (customSat  ?: 96))
+    Integer l  = safeInt(calLevel,    (customLevel ?: 91))
+    Integer ef = safeInt(calEffect,   (ledEffect ?: 1))
+    Integer du = safeInt(calDuration, (ledDuration ?: 255))
+
+    // Clear legacy notifications FIRST for accurate preview
+    if (legacyAllNotifs) {
+        logDebug "Clearing ${legacyAllNotifs.size()} legacy Notification LEDs before calibration preview."
+        safeCmd(legacyAllNotifs, "off"); pauseExecution(250)
+    }
+
+    logInfo "🎨 Preview → Blue(effect:${ef}, hue:${h}, level:${l}, dur:${du}) | Legacy(h:${h}, s:${s}, l:${l})"
+
+    if (blueDevices) {
+        Integer hueByte = hueToByte(h)
+        blueDevices.each { safeCmd(it, "ledEffectAll", [ef, hueByte, l, du]) }
+    }
+    if (legacyCustom) {
+        legacyCustom.each { safeCmd(it, "setColor", [hue:h, saturation:s, level:l]) }
+    }
+}
+
+def applyCalibrationNow() {
+    Integer h  = safeInt(calHue,      (customHueD ?: 76))
+    Integer s  = safeInt(calSat,      (customSat  ?: 96))
+    Integer l  = safeInt(calLevel,    (customLevel ?: 91))
+    Integer ef = safeInt(calEffect,   (ledEffect ?: 1))
+    Integer du = safeInt(calDuration, (ledDuration ?: 255))
+
+    // Clear legacy notifications FIRST for accurate apply
+    if (legacyAllNotifs) {
+        logDebug "Apply: turning off ${legacyAllNotifs.size()} legacy Notification LEDs before setting LED Color."
+        safeCmd(legacyAllNotifs, "off"); pauseExecution(250)
+    }
+
+    logInfo "🌀 Apply to All Selected → Blue(effect:${ef}, hue:${h}, level:${l}, dur:${du}) | Legacy(h:${h}, s:${s}, l:${l})"
+
+    if (blueDevices) {
+        Integer hueByte = hueToByte(h)
+        blueDevices.each { safeCmd(it, "ledEffectAll", [ef, hueByte, l, du]) }
+    }
+    if (legacyCustom) {
+        legacyCustom.each { safeCmd(it, "setColor", [hue:h, saturation:s, level:l]) }
+    }
+}
+
+/* ===================== COUNTS & SUMMARY ===================== */
+private String ledCountsLine() {
+    def modernCt = blueDevices?.size() ?: 0
+    def w = legacyWhite ?.size() ?: 0
+    def b = legacyBlue  ?.size() ?: 0
+    def g = legacyGreen ?.size() ?: 0
+    def o = legacyOrange?.size() ?: 0
+    def r = legacyRed   ?.size() ?: 0
+    def c = legacyCustom?.size() ?: 0
+    def legacyCt = w + b + g + o + r + c
+    return "💎 Inovelli LEDs — Modern:${modernCt} • Legacy:${legacyCt} (⚪️:${w} 🔵:${b} 🟢:${g} 🟠:${o} 🔴:${r} ⚫️:${c})"
+}
+
+private String allModesCountsLine() {
+    def onCt   = buttonSwitchesOn ?.size() ?: 0
+    def offCt  = buttonSwitchesOff?.size() ?: 0
+    def dimCt  = buttonDimmers    ?.size() ?: 0
+    def lockCt = buttonLocks      ?.size() ?: 0
+    def lvlTxt = (buttonDimmers ? " — Level: ${(buttonDimLevel ?: 50)}%" : "")
+    return "All‑Modes: ON:${onCt} | OFF:${offCt} | DIM:${dimCt}${lvlTxt} | LOCK:${lockCt}"
+}
+
+private String modeCountsLine(String m) {
+    def onCt   = (settings["switchesOn${m}"]  ?.size() ?: 0)
+    def offCt  = (settings["switchesOff${m}"] ?.size() ?: 0)
+    def dimCt  = (settings["dimmersLvl${m}"] ?.size() ?: 0)
+    def lockCt = (settings["locks${m}"]      ?.size() ?: 0)
+    def lvl    = settings["dimmerValue${m}"] ?: 50
+    def lvlTxt = (dimCt > 0 ? " — Level: ${lvl}%" : "")
+    return "ON:${onCt} | OFF:${offCt} | DIM:${dimCt}${lvlTxt} | LOCK:${lockCt}"
+}
+
+private String modeTotalsLine() {
+    def totalOn   = (switchesOnD ?.size() ?: 0) + (switchesOnE ?.size() ?: 0) + (switchesOnN ?.size() ?: 0) + (switchesOnA ?.size() ?: 0)
+    def totalOff  = (switchesOffD?.size() ?: 0) + (switchesOffE?.size() ?: 0) + (switchesOffN?.size() ?: 0) + (switchesOffA?.size() ?: 0)
+    def totalDim  = (dimmersLvlD ?.size() ?: 0) + (dimmersLvlE ?.size() ?: 0) + (dimmersLvlN ?.size() ?: 0) + (dimmersLvlA ?.size() ?: 0)
+    def totalLock = (locksD      ?.size() ?: 0) + (locksE      ?.size() ?: 0) + (locksN      ?.size() ?: 0) + (locksA      ?.size() ?: 0)
+    return "Totals (Per‑Mode) — ON:${totalOn} | OFF:${totalOff} | DIM:${totalDim} | LOCK:${totalLock}"
+}
+
+/* Summary (used by parent) */
+def getSummary() { summaryHtml() }
+private summaryHtml() {
+    def triggers = []
+    if (reactToModes)    triggers << "Modes"
+    if (reactToButtons)  triggers << "Buttons"
+    if (reactToSwitches) triggers << "Switches"
+    def trigTxt = triggers ? triggers.join(" + ") : "None"
+
+    def activeModes = []
+    if (enabledDay)     activeModes << "Day"
+    if (enabledEvening) activeModes << "Evening"
+    if (enabledNight)   activeModes << "Night"
+    if (enabledAway)    activeModes << "Away"
+    def modeTxt = activeModes ? activeModes.join(" + ") : "None"
+
+    def onCt   = (buttonSwitchesOn?.size()  ?: 0) + (switchesOnD?.size()  ?: 0) + (switchesOnE?.size()  ?: 0) + (switchesOnN?.size()  ?: 0) + (switchesOnA?.size()  ?: 0)
+    def offCt  = (buttonSwitchesOff?.size() ?: 0) + (switchesOffD?.size() ?: 0) + (switchesOffE?.size() ?: 0) + (switchesOffN?.size() ?: 0) + (switchesOffA?.size() ?: 0)
+    def dimCt  = (buttonDimmers?.size()     ?: 0) + (dimmersLvlD?.size()  ?: 0) + (dimmersLvlE?.size()  ?: 0) + (dimmersLvlN?.size()  ?: 0) + (dimmersLvlA?.size()  ?: 0)
+    def lockCt = (buttonLocks?.size()       ?: 0) + (locksD?.size()       ?: 0) + (locksE?.size()       ?: 0) + (locksN?.size()       ?: 0) + (locksA?.size()       ?: 0)
+
+    def blueCt = blueDevices?.size() ?: 0
+    def w = legacyWhite ?.size() ?: 0
+    def b = legacyBlue  ?.size() ?: 0
+    def g = legacyGreen ?.size() ?: 0
+    def o = legacyOrange?.size() ?: 0
+    def r = legacyRed   ?.size() ?: 0
+    def c = legacyCustom?.size() ?: 0
+    def ledLine = "💎 Blue:${blueCt} — Legacy ⚪️:${w} 🔵:${b} 🟢:${g} 🟠:${o} 🔴:${r} ⚫️:${c}"
+
+    return "<b>${app.label ?: 'Smart Actions Rule'}</b><br/>" +
+           "⚙️ Triggers: ${trigTxt}<br/>" +
+           "🕓 Active Modes: ${modeTxt}<br/>" +
+           "Devices: ON(${onCt}) | OFF(${offCt}) | DIM(${dimCt}) | LOCK(${lockCt})<br/>" +
+           ledLine
+}
+
+/* ===================== LED HELPERS ===================== */
+private void setLedColor(hue, modeName) {
+    Integer colorByte = hueToByte(hue)
+    blueDevices?.each { safeCmd(it, "ledEffectAll", [1, colorByte, 100, 255]) }
+    logDebug "Set Blue LEDs for ${modeName}: hue ${hue} (${colorByte})"
+}
+
+private void setCustomLedImmediateIfEnabled() {
+    // --- Modern Inovelli Blue ---
+    if (customLedBlue && blueDevices) {
+        Integer hueByte = hueToByte(customHueD ?: 76)
+        Integer lvl     = safeInt(ledLevel, 100)
+        Integer dur     = safeInt(ledDuration, 255)
+        Integer eff     = safeInt(ledEffect, 1)
+        blueDevices.each { safeCmd(it, "ledEffectAll", [eff, hueByte, lvl, dur]) }
+        logDebug "Custom LED Immediate → Blue: effect:${eff} hueByte:${hueByte} level:${lvl} duration:${dur}"
+    } else if (blueDevices) {
+        // Default (non‑custom) Blue = RED for ON feedback
+        Integer redByte = hueToByte(10)
+        blueDevices.each { safeCmd(it, "ledEffectAll", [1, redByte, 100, 255]) }
+        logDebug "Default LED → Blue: RED fallback (no custom active)."
+    }
+
+    // --- Legacy Inovelli Red ---
+    if (customLedLegacy && legacyCustom) {
+        if (legacyAllNotifs) {
+            logDebug "Turning off ${legacyAllNotifs.size()} legacy Notification devices before Custom LED color."
+            safeCmd(legacyAllNotifs, "off")
+            pauseExecution(250)
+        }
+        def h = customHueD ?: 76
+        def s = customSat  ?: 96
+        def l = customLevel ?: 91
+        legacyCustom.each { safeCmd(it, "setColor", [hue:h, saturation:s, level:l]) }
+        logDebug "Custom LED Immediate → Legacy (LED Color): h:${h} s:${s} l:${l}"
+    } else if (legacyRed) {
+        safeCmd(legacyRed, "on")
+        logDebug "Default LED → Legacy: RED fallback (no custom active)."
+    }
+}
+
+private Integer hueToByte(h) { return Math.min(Math.round((safeInt(h,0)/360.0)*255), 255) }
+private Integer safeInt(v, d=0) { try { return v as Integer } catch (e) { return d } }
+private Integer getHue(mode) {
+    switch(mode) {
+        case "Day"    : return 360
+        case "Evening": return 241
+        case "Night"  : return 120
+        case "Away"   : return 10
+        case "Custom" : return (customHueD ?: 76)
+        default       : return 360
+    }
+}
+
+/* ===================== SAFETY & LOGGING ===================== */
+private void safeCmd(devs, cmd, args=null) {
+    if (!devs) return
+    def list = (devs instanceof Collection) ? devs.findAll{ it } : [devs]
+    list.each { d ->
+        try {
+            if (d && d.hasCommand(cmd)) {
+                trace "✨ [TRACE] Calling ${d.displayName}.${cmd}(${args})"
+                if (args == null) {
+                    d."$cmd"()
+                } else if (args instanceof Map) {
+                    d."$cmd"(args)
+                } else if (args instanceof List) {
+                    d."$cmd"(*args)
+                } else {
+                    d."$cmd"(args)
+                }
+            }
+        } catch (e) {
+            logWarn "Cmd ${cmd} failed on ${d?.displayName}: ${e.message}"
+        }
+    }
+}
+
+def logsOff() { log.warn "✨ Debug logging disabled."; app.updateSetting("enableLogging", [value:"false", type:"bool"]) }
+private void logInfo(msg)  { if (enableLogging) log.info  "✨ ${msg}" }
+private void logDebug(msg) { if (enableLogging) log.debug "✨ [DEBUG] ${msg}" }
+private void logWarn(msg)  { log.warn  "✨ [WARN] ${msg}" }
+private void trace(msg)    { if (traceMode)    log.trace "✨ [TRACE] ${msg}" }
